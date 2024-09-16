@@ -8,47 +8,38 @@ Imports MySql.Data.MySqlClient
 Imports System.Threading
 Imports System.Configuration
 Imports System.Xml
-Imports DijkstraPath
-Imports System.Diagnostics
 
 Public Class Form1
 
 
-    Dim car_no As Integer = 50 'ËÆäÊõ¥Êï∏Èáè doworkË¶ÅÊîπ
+    Dim car_no As Integer = 30 '≈‹ßÛº∆∂q dowork≠nßÔ
     Dim Car(car_no) As Car_point
-    Dim shelf_car_total_no As Integer = 410
+    Dim shelf_car_total_no As Integer = 280
     Dim shelf_car(shelf_car_total_no) As shelf_car_point
     Dim path(100, 2) As String
     Dim Tag_point_list(5000) As Tag_Point
-    Dim Tag_point_Dictionary As New Dictionary(Of Integer, Tag_Point)()
-
     Delegate Sub settextcallback(ByVal logout As String, ByVal append As Boolean)
+    Delegate Sub setcommtextcallback(ByVal logout As String, ByVal append As Boolean)
     Delegate Sub connectlogcallback(ByVal logout As String, ByVal append As Boolean)
-    Dim Door_List(40) As Door_point
+    Dim Door_List(30) As Door_point
     Dim LFT_List(6) As LFT_point
-    Dim path_S(300) As SPath
+    Dim path_S(200) As SPath
     Dim path_base(5000) As Path
     Dim path_fork_base(5000) As Path
-
-
-    Dim Path_base_Dictionary As New Dictionary(Of Integer, Path)()
-    Dim Path_fork_Dictionary As New Dictionary(Of Integer, Path)()
-
-
-    Dim Dijkstra_list(20) As Dijkstra.Dijkstra_ary
+    Dim Dijkstra_list(20) As Dijkstra_ary
     Dim AgvTimeoutVal As Integer = 99999
 
-    Dim Dijkstra_fn As Dijkstra.Dijkstra_ary
+    Dim AGVratio As Double
     Dim Tag_ID_List(5000) As Integer
     Dim Tag_ID_Fork_List(5000) As Integer
     '  Dim Read_modbus(500) As Integer
     Dim log_filename As String = ".\log\" + Now.ToString("yyyyMMdd") + ".log"
     Dim log As StreamWriter
 
-    Dim connectlogtxt_filename As String = ".\log\" + "connect" + Now.ToString("yyyyMMdd") + ".log"
+    Dim connectlogtxt_filename As String = "connect" + Now.ToString("yyyyMMdd") + ".log"
     Dim connectlogtxt As StreamWriter
     Dim view_car_idx As Integer = 0
-    Dim Mysql_str As String = "charset=utf8 ;Database=agv; Data Source=127.0.0.1;User id=agvc;Password=agv; Allow Zero Datetime=True;"
+    Public Mysql_str As String = "charset=utf8 ;Database=agv; Data Source=127.0.0.1;User id=agvc;Password=agv; Allow Zero Datetime=True;"
 
     Dim offset_x As Integer = 0
     Dim offset_y As Integer = 0
@@ -58,24 +49,500 @@ Public Class Form1
     Dim user As String = "agvc"
     Dim password As String = "FA$admin01"
 
-    Dim PathLen As Integer = 7
-    Dim ReMapLen As Integer = 4
+    ' Dim PathLen As Integer = 7
+    ' Dim ReMapLen As Integer = 4
     Dim DoorSetLen As Integer = 2
-    Dim RetreatPath As Integer = 10
-    Dim BmsAlertIdx As Integer = (1) + (1 << 2) + (1 << 3) + (1 << 5) + (1 << 7) + (1 << 9) + (1 << 13) + (1 << 15) ' 41645 '1010 0010 1010 1101
-    Dim BmsWarmIdx As Integer = (1 << 14) + (1 << 12) + (1 << 11) + (1 << 10) + (1 << 8) + (1 << 4) + (1 << 1)  '1010 0010 1010 1101
-
-    Dim alarm As ALM
-    Dim testval As Integer = 0
     'Dim Rotate_list(500) As Integer
     'Dim Fork_point As String
     'Dim ALL_Loading_check As Boolean = True
 
     '  Dim thread_idx As Long = 0
+    Dim ConnectionState As Integer = 0
+    Dim Pre_ControlState As Integer = 2
+    Dim Pre_SCState As Integer = 0
+    Private WithEvents comQSWrapper As New SECSComm
+    Public WithEvents comQGWrapper As New GEM
+    Dim eqp_client(50) As EQP_Modus
+    Dim ChargerClient(10) As EQP_Modus
+
+    Dim alarm As ALM
+    Dim start_flag As Boolean = False
+    Dim McsPort As Integer = 5001
+    Dim AutoReset(100) As Integer
+    Dim SOC As Integer = 100
+    Dim AllBlockPoint As String = ""
+    Dim AllBlockPointList() As String
+    Dim lablelist(200) As lableTxt
+    Dim BmsAlertIdx As Integer = (1) + (1 << 2) + (1 << 3) + (1 << 5) + (1 << 7) + (1 << 9) + (1 << 13) + (1 << 15) ' 41645 '1010 0010 1010 1101
+    Dim BmsWarmIdx As Integer = (1 << 14) + (1 << 12) + (1 << 11) + (1 << 10) + (1 << 8) + (1 << 4) + (1 << 1)  '1010 0010 1010 1101
+    Dim testval As Integer = 0
+    Public Declare Function SetLocalTime Lib "Coredll.dll" (ByRef lpSystemTime As SYSTEMTIME) As Integer
+    Public Structure SYSTEMTIME
+        Public Year As Short
+        Public Month As Short
+        Public DayOfWeek As Short
+        Public Day As Short
+        Public Hour As Short
+        Public Minute As Short
+        Public Second As Short
+        Public Milliseconds As Short
+    End Structure
+    Public Sub QSEvent(ByVal lID As Integer, ByVal lMsgID As Integer, ByVal S As Integer, ByVal F As Integer, ByVal W_Bit As Integer, ByVal ulSystemBytes As UInteger, ByVal RawData As Object, ByVal Head As Object, ByVal pEventText As String) Handles comQSWrapper.QSEvent
+
+        Dim lOffset As Integer = 0
+        Dim lItemNum As Integer = 0
+        Dim ItemData As Object = New Object
+        Dim OutputRawData(1000) As Byte
+        Dim DataItemOutLen As Integer = 0
+
+        lOffset = 0
+        If lID = 2 And lMsgID = 3 Then
+            setCommtext("MCS ´ÿ•ﬂ≥sΩu:" + ulSystemBytes.ToString)
+        ElseIf lID = 2 And lMsgID = 15 Then
+            setCommtext("MCS Link Test:" + ulSystemBytes.ToString)
+        ElseIf lID = 2 And lMsgID = 5 Then
+            Dim data() As Byte = CType(RawData, Byte())
+            setCommtext("MCS Send:" + ulSystemBytes.ToString + byte2str(data, 0, ulSystemBytes).ToString)
+        ElseIf lID = 2 And lMsgID = 6 Then
+            Dim data() As Byte = CType(RawData, Byte())
+            setCommtext("MCS Send Err:" + ulSystemBytes.ToString + byte2str(data, 0, ulSystemBytes).ToString)
+        ElseIf lID = 1 And lMsgID = 16 Then
+            Dim data() As Byte = CType(RawData, Byte())
+            setCommtext("MCS ReviceLen>0:""≥—§US" + S.ToString + "F" + F.ToString + ":" + byte2str(data, 0, data.Length).ToString)
+        ElseIf lID = 3 And lMsgID = 1 Then
+            Dim data() As Byte = CType(RawData, Byte())
+            setCommtext("MCS recv(" + ulSystemBytes.ToString + "):" + byte2str(data, 0, ulSystemBytes).ToString)
+        ElseIf lID = 3 And lMsgID = 2 Then
+            Dim data() As Byte = CType(RawData, Byte())
+            setCommtext("MCS-cut1(" + ulSystemBytes.ToString + "):" + byte2str(data, 0, ulSystemBytes).ToString)
+        ElseIf lID = 4 And lMsgID = 1 Then
+            '¨ˆø˝LOG
+            Dim data() As Byte = CType(RawData, Byte())
+            setCommtext("MCS-showErr(" + ulSystemBytes.ToString + "):" + byte2str(data, 0, ulSystemBytes).ToString)
+        ElseIf lID = 4 And lMsgID = 2 Then
+            'ERR MSG
+            Try
+                setCommtext("ErrMsg:" + ulSystemBytes.ToString + " " + pEventText)
+                Dim data() As Byte = CType(RawData, Byte())
+                setCommtext("MCS-showErr(" + ulSystemBytes.ToString + "):" + byte2str(data, 0, 500).ToString)
+            Catch ex As Exception
+
+            End Try
+
+            'Else
+            '    setCommtext("UNKNOWN:" + S.ToString + "," + F.ToString + ulSystemBytes.ToString + " " + pEventText.ToString)
+        End If
+
+        If S > 0 And F > 0 Then
+            setCommtext("system:" + ulSystemBytes.ToString + "¶¨®ÏS" + S.ToString + "F" + F.ToString)
+            ShowSECSIIMessage(RawData)
+            If S = 1 And F = 17 Then
+                'ßP¬_®t≤Œ¶≥®S¶≥AUTO 
+                Dim SC_State As Integer
+                'PAUSE §¡¥´
+                comQGWrapper.GetSV(GEM_SC_STATE, 1, SC_State)
+                If SC_State = GEM.SC_AUTO Then
+                    'comQGWrapper.UpdateSV(GEM_CONTROL_STATE, GEM.OnlineLoaclval)
+                End If
+
+
+
+                comQGWrapper.EventReportSend(2)
+
+
+
+
+            ElseIf S = 2 And F = 41 And W_Bit = 1 Then
+                'RCMD ABORT CANCEL PAUSE  RESUME REMOVE PRIORITYUPDATE≥B≤z©R•O 
+                'INSTALL §W≥¯CARRIERID  CARRIERTYPESET
+                'PORTMODECHANGE
+                'SCAN
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing)
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, ItemData)
+                If ItemData = "CANCEL" Then
+                ElseIf ItemData = "ABORT" Then
+                ElseIf ItemData = "PAUSE" Then
+                    comQGWrapper.UpdateSV(GEM_SC_STATE, GEM.SC_PAUSING)
+                ElseIf ItemData = "RESUME" Then
+                    comQGWrapper.UpdateSV(GEM_SC_STATE, GEM.SC_AUTO)
+                    'comQGWrapper.EventReportSend(53)
+                    start_flag = True
+                ElseIf ItemData = "INSTALL" Then
+
+                    'ItemData
+                    Dim loc As String = ""
+                    Dim cstid As String = ""
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing) 'L3
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing) 'L2
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) '"CARRIERID"
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) 'CARRIERID
+                    cstid = ItemData
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing) 'L2
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) '"CARRIERLOC"
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) 'CARRIERLOC
+                    loc = ItemData
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing) 'L2
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) '"CARRIERTYPE"
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) 'CARRIERTYPE
+                    Dim locPoint As New Tag_Point
+                    Dim Query As String
+                    locPoint = Seach_Tagid(loc)
+                    If Not locPoint.LOC = "" Then
+
+                        comQGWrapper.CST_Add(cstid, locPoint.ZONE_NAME, locPoint.LOC)
+                        Query = "insert ignore into `carrier` (STK_NAME,CARRIER_ID,LOT_ID,LOC_NAME,LOC_TYPE,SUB_LOC,CARRIER_STATUS,STORED_TIME,REQ_TIME,UPDATE_DATE,UPDATE_BY,CREATE_DATE,CREATE_BY) " + _
+                         "VALUES ('" + comQGWrapper.Eqpname + "', '" + cstid + "', '" + cstid + "','" + locPoint.ZONE_NAME + "',1,'" + locPoint.LOC + "', '4', now(), '', now(), 'AGVC', now(), 'AGVC');"
+                        Update_SQL(Query)
+                    End If
+
+
+                ElseIf ItemData = "REMOVE" Then
+
+                    Dim cstid As String = ""
+                    Dim idx As Integer = -1
+                    Dim Query As String
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing) 'L3
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing) 'L2
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) '"CARRIERID"
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) 'CARRIERID
+                    cstid = ItemData
+                    comQGWrapper.CST_REMOVE(cstid)
+                    Query = "delete from `carrier` where CARRIER_ID='" + cstid + "';"
+                    Update_SQL(Query)
+                ElseIf ItemData = "PORTTYPCHG" Then
+                ElseIf ItemData = "SCAN" Then
+                ElseIf ItemData = "CARRIERTYPESET" Then
+                    Dim CSTID As String = ""
+                    Dim CarrierType As String = ""
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing) 'L2
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing) 'L2
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) '"CSTID"
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) 'CSTID
+                    CSTID = ItemData
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing) 'L2
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) '"Priority"
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) 'CarrierType
+                    CarrierType = ItemData
+                    For i As Integer = 0 To comQGWrapper.CST.Length - 1
+                        If comQGWrapper.CST(i).CarrierID = CSTID Then
+                            comQGWrapper.CST(i).CarrierType = CarrierType
+                            Update_SQL("UPDATE `carrier` SET `CARRIER_TYPE` = '" + CarrierType + "' WHERE `carrier`.`CARRIER_ID` = '" + comQGWrapper.CST(i).CarrierID + "'")
+                            Exit For
+                        End If
+
+                    Next
+                ElseIf ItemData = "PRIORITYUPDATE" Then
+                    Dim cmdid As String = ""
+                    Dim Priority As UShort
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing) 'L2
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing) 'L2
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) '"Commandid"
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) 'Commandid
+                    cmdid = ItemData
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing) 'L2
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) '"Priority"
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) 'Priority
+                    Priority = ItemData(0)
+                    For i As Integer = 0 To comQGWrapper.CST.Length - 1
+                        If comQGWrapper.CST(i).CommandID = cmdid Then
+                            comQGWrapper.CST(i).PRIORITY = Priority
+                            Update_SQL("update mcs_cmd_list set PRIORITY=" + comQGWrapper.CST(i).PRIORITY.ToString + " where CARRIERID='" + comQGWrapper.CST(i).CarrierID + "'")
+                        End If
+
+                    Next
+
+                End If
+
+
+                ' comQSWrapper.SendSECSIIMessage(S, F + 1, 0, ulSystemBytes, OutputRawData)
+            ElseIf S = 2 And F = 49 Then
+                Dim temp_carrier As GEM.Carrier = New GEM.Carrier
+                lOffset = 0
+                'ItemData
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing)
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.UINT_2_TYPE, lItemNum, ItemData) 'Data ID = 0 (Fixed) 
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) 'Not Used 
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) '
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing)
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing)
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) '
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing)
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing)
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) '
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) '°ßCOMMANDID°® 
+                temp_carrier.CommandID = ItemData
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing)
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData)
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.UINT_2_TYPE, lItemNum, ItemData) '°ßPRIORITY°® 
+                temp_carrier.PRIORITY = ItemData(0)
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing)
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData)
+
+                lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing) 'L7
+                Dim len As Integer = lItemNum
+                Dim ItemData2 As Object = New Object
+                For i As Integer = 0 To len - 1
+                    'CARRIERID SOURCE DEST NEXT CARRIERTYPE EMPTYFLAG PROCESSID
+
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing)
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData) '
+                    lOffset = comQSWrapper.DataItemIn(RawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData2) '
+                    temp_carrier.SetValByName(ItemData, ItemData2)
+
+                Next
+                Dim flag As Boolean = False
+                Dim ACKCodes As Byte
+                Dim CST_flag As Integer = -1
+                If Not temp_carrier.CarrierID.Length = 6 Then
+                    ACKCodes = 68
+                End If
+                If temp_carrier.PRIORITY > 99 Then
+                    ACKCodes = 74
+                End If
+
+                For i As Integer = 0 To comQGWrapper.CST.Length - 1
+                    If comQGWrapper.CST(i).CarrierID = temp_carrier.CarrierID Then
+                        CST_flag = i
+                    End If
+                    If comQGWrapper.CST(i).CommandID = temp_carrier.CommandID Then
+                        'Cmd ID ≠´Ω∆
+                        ' ACKCodes = 65
+                    End If
+                    If comQGWrapper.CST(i).CarrierID = temp_carrier.CarrierID And Not comQGWrapper.CST(i).CommandID = "" Then
+                        'CST ≠´Ω∆
+                        '  ACKCodes = 66
+                    End If
+
+                    'EQ §~∫‚ ¥◊¶Ï§£∫‚
+                    If comQGWrapper.CST(i).SOURCE = temp_carrier.SOURCE And Not temp_carrier.SOURCE.StartsWith(comQGWrapper.Eqpname) Then
+                        '  ACKCodes = 75 'EQ®”∑Ω≠´Ω∆
+                    End If
+                Next
+
+                flag = False
+                For i As Integer = 0 To comQGWrapper.EqPort.Length - 1
+                    'ß‰¥M•ÿ™∫©Œ¨O®”∑Ω¨Oß_¶≥¶s¶bEQ
+                    If temp_carrier.DEST = comQGWrapper.EqPort(i).PortID And comQGWrapper.EqPort(i).LoadAvail = 1 Then
+                        flag = True
+                    End If
+                Next
+                If flag Then
+                    'ACKCodes = 69
+                End If
+                flag = False
+                For i As Integer = 0 To comQGWrapper.EqPort.Length - 1
+                    'ß‰¥M•ÿ™∫©Œ¨O®”∑Ω¨Oß_¶≥¶s¶bEQ
+                    If temp_carrier.SOURCE = comQGWrapper.EqPort(i).PortID And comQGWrapper.EqPort(i).UnLoadAvail = 1 Then
+                        flag = True
+                    End If
+                Next
+                If flag Then
+                    'ACKCodes = 70
+                End If
+
+                If ACKCodes = 0 Then
+                    temp_carrier.TransferState = GEM.TransferState_Queued
+                End If
+
+
+
+
+                Dim str As String = "COMMANDINFO"
+                If ACKCodes = 0 Then
+                    '®S¶≥∞›√D°A•i•H∂}©lΩ∆ªsCmd ID 
+                    Dim Query As String
+                    If CST_flag = -1 Then
+                        If Not temp_carrier.SOURCE.StartsWith(comQGWrapper.Eqpname) Then
+                            CST_flag = comQGWrapper.CST_Add(temp_carrier.CarrierID, temp_carrier.SOURCE, temp_carrier.SOURCE)
+                            Query = "insert ignore into `carrier` (STK_NAME,CARRIER_ID,LOT_ID,LOC_NAME,LOC_TYPE,SUB_LOC,CARRIER_STATUS,STORED_TIME,REQ_TIME,UPDATE_DATE,UPDATE_BY,CREATE_DATE,CREATE_BY) " + _
+                         "VALUES ('" + comQGWrapper.Eqpname + "', '" + comQGWrapper.CST(CST_flag).CarrierID + "', '" + comQGWrapper.CST(CST_flag).CarrierLoc + "','" + comQGWrapper.CST(CST_flag).CarrierLoc + "',1,'" + comQGWrapper.CST(CST_flag).CarrierZoneName + "', '4', now(), '', now(), 'AGVC', now(), 'AGVC');"
+                            Update_SQL(Query)
+                        End If
+                    End If
+
+                    If CST_flag > -1 Then
+
+                        comQGWrapper.CST(CST_flag).CommandID = temp_carrier.CommandID
+                        comQGWrapper.CST(CST_flag).PRIORITY = temp_carrier.PRIORITY
+                        comQGWrapper.CST(CST_flag).SOURCE = temp_carrier.SOURCE
+                        comQGWrapper.CST(CST_flag).DEST = temp_carrier.DEST
+                        comQGWrapper.CST(CST_flag).NEXTDest = temp_carrier.NEXTDest
+                        comQGWrapper.CST(CST_flag).CarrierType = temp_carrier.CarrierType
+                        comQGWrapper.CST(CST_flag).EmptyCarrier = temp_carrier.EmptyCarrier
+                        comQGWrapper.CST(CST_flag).PROCESSID = temp_carrier.PROCESSID
+                        comQGWrapper.CST(CST_flag).TransferState = GEM.TransferState_Queued
+                        comQGWrapper.CST(CST_flag).note = "Waitting"
+                        comQGWrapper.CST(CST_flag).EQ_Retry = 0
+                        comQGWrapper.CST(CST_flag).mcstime = CLng(Now.ToString("yyyyMMddHHmmss"))
+                        Query = "INSERT INTO `agv`.`mcs_cmd_history` ( `COMMANDID` ,`CARRIERID` ,`SOURCE` ,`DEST` ,`PROCESSID` ,`REQUEST_TIME`,PRIORITY )" + _
+                            "VALUES ( '" + comQGWrapper.CST(CST_flag).CommandID + "', '" + comQGWrapper.CST(CST_flag).CarrierID + "', '" + comQGWrapper.CST(CST_flag).SOURCE + "', '" + comQGWrapper.CST(CST_flag).DEST + "', '" + comQGWrapper.CST(CST_flag).PROCESSID + "', CURRENT_TIMESTAMP()," + comQGWrapper.CST(CST_flag).PRIORITY.ToString + ");"
+                        Update_SQL(Query)
+                        Query = "INSERT ignore INTO `agv`.`mcs_cmd_list` ( `COMMANDID` ,`CARRIERID` ,`SOURCE` ,`DEST` ,`PROCESSID` ,`REQUEST_TIME`,PRIORITY )" + _
+                        "VALUES ( '" + comQGWrapper.CST(CST_flag).CommandID + "', '" + comQGWrapper.CST(CST_flag).CarrierID + "', '" + comQGWrapper.CST(CST_flag).SOURCE + "', '" + comQGWrapper.CST(CST_flag).DEST + "', '" + comQGWrapper.CST(CST_flag).PROCESSID + "', CURRENT_TIMESTAMP()," + comQGWrapper.CST(CST_flag).PRIORITY.ToString + ");"
+                        Update_SQL(Query)
+                        Query = "update mcs_cmd_list set `COMMANDID`='" + comQGWrapper.CST(CST_flag).CommandID + "' ,SOURCE='" + comQGWrapper.CST(CST_flag).SOURCE + "',DEST='" + comQGWrapper.CST(CST_flag).DEST + "',PROCESSID='" + comQGWrapper.CST(CST_flag).PROCESSID + "',PRIORITY=" + comQGWrapper.CST(CST_flag).PRIORITY.ToString + " where CARRIERID='" + comQGWrapper.CST(CST_flag).CarrierID + "'"
+                        Update_SQL(Query)
+                        Query = "update `carrier` set `RROCESS_ID`='" + comQGWrapper.CST(CST_flag).PROCESSID + "' where CARRIER_ID='" + comQGWrapper.CST(CST_flag).CarrierID + "'"
+
+                        Update_SQL(Query)
+                      
+                    End If
+
+
+
+
+
+                Else
+                    setCommtext("CST tranfer" + temp_carrier.CarrierID + "ACK=" + ACKCodes.ToString)
+                End If
+
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, 2, SECSComm.LIST_TYPE, Nothing, DataItemOutLen)
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, 2, SECSComm.LIST_TYPE, Nothing, DataItemOutLen)
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, str.Length, SECSComm.ASCII_TYPE, str, DataItemOutLen)
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, 2, SECSComm.LIST_TYPE, Nothing, DataItemOutLen)
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, 2, SECSComm.LIST_TYPE, Nothing, DataItemOutLen)
+                str = "COMMANDID"
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, str.Length, SECSComm.ASCII_TYPE, str, DataItemOutLen)
+                '0:          Normal()
+                '1:          Undefined Parameter X
+                '2 : Parameter is outside the specified values. X
+                '3 : Parameter is outside the specified types. X
+                '4:          Normal()
+                '5~63 : Reserved 
+                '64 : The career number is abnormal. V
+                '65 : Command ID duplicate. V
+                '66 : Carrier ID duplicate. X
+                '67 : Command ID is abnormal. X
+                '68 : Carrier ID is abnormal. V
+                '69 : Load saving equip name undefinition. V
+                '70 : Unloading equip name undefinition. 
+                '71 : The equip name is abnormal. 
+                '72 : The transportation table is full. 
+                '73 : It is the unloading device name <it is> the same.become 
+                'empty the load. 
+                '74 : The priority is abnormal. V
+                '75 : SOURCE duplicate.  V
+                '76 : Additionally, it is abnormal. 
+                '82 : Transportation is former abnormal. (group name specification) 
+                '<Not Use> 
+                '83 : The station does not exist in the group at the transportation 
+                'destination. 
+                '84 : The or load lower destination at the load saving destination is 
+                'different. (for 2 batch) <Not Use> 
+                '85 : Cassette type error. MCS should set the command to error. 
+                '86 : Specified shelf is a block shelf. 
+                ACKCodes = 0
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, 1, SECSComm.BINARY_TYPE, ACKCodes, DataItemOutLen)
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, 2, SECSComm.LIST_TYPE, Nothing, DataItemOutLen)
+                str = "PRIORITY"
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, str.Length, SECSComm.ASCII_TYPE, str, DataItemOutLen)
+                ACKCodes = 0
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, 1, SECSComm.BINARY_TYPE, ACKCodes, DataItemOutLen)
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, 1, SECSComm.LIST_TYPE, Nothing, DataItemOutLen)
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, 2, SECSComm.LIST_TYPE, Nothing, DataItemOutLen)
+                str = "TRANSFERINFO"
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, str.Length, SECSComm.ASCII_TYPE, str, DataItemOutLen)
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, 3, SECSComm.LIST_TYPE, Nothing, DataItemOutLen)
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, 2, SECSComm.LIST_TYPE, Nothing, DataItemOutLen)
+                str = "CARRIERID"
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, str.Length, SECSComm.ASCII_TYPE, str, DataItemOutLen)
+                ACKCodes = 0
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, 1, SECSComm.BINARY_TYPE, ACKCodes, DataItemOutLen)
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, 2, SECSComm.LIST_TYPE, Nothing, DataItemOutLen)
+                str = "SOURCEPORT"
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, str.Length, SECSComm.ASCII_TYPE, str, DataItemOutLen)
+                ACKCodes = 0
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, 1, SECSComm.BINARY_TYPE, ACKCodes, DataItemOutLen)
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, 2, SECSComm.LIST_TYPE, Nothing, DataItemOutLen)
+                str = "DESTPORT"
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, str.Length, SECSComm.ASCII_TYPE, str, DataItemOutLen)
+                ACKCodes = 0
+                DataItemOutLen = comQSWrapper.DataItemOut(OutputRawData, 1, SECSComm.BINARY_TYPE, ACKCodes, DataItemOutLen)
+                '  comQSWrapper.SendSECSIIMessage(S, F + 1, 0, ulSystemBytes, OutputRawData)
+                'MsgBox("CST tranfer")
+                setCommtext("CST tranfer" + temp_carrier.CarrierID + " from " + temp_carrier.SOURCE + " To " + temp_carrier.DEST.ToString)
+                Install_CMD(temp_carrier)
+
+
+                ElseIf S = 2 And F = 31 Then
+
+                    setCommtext("Systemtime:" + comQGWrapper.gettime)
+                End If
+        End If
+
+        If S = 2 And F = 49 Then
+            '∂«∞e©R•O¶b≥o√‰µo∞e
+            setCommtext("S2F49 Start:" + ulSystemBytes.ToString)
+            comQGWrapper_QGEvent(1, S, F + 1, 0, ulSystemBytes, OutputRawData, DataItemOutLen)
+            setCommtext("S2F49 End:" + ulSystemBytes.ToString)
+        ElseIf lMsgID = QS_EVENT_RECV_MSG Then
+            comQGWrapper.ProcessMessage(lMsgID, S, F, W_Bit, ulSystemBytes, RawData, Head, pEventText)
+        ElseIf lMsgID = QS_EVENT_CONNECTED Then
+            'Ver:4.10 
+            Dim CONTROL_STATE As UInt16 = 0
+            comQGWrapper.GetSV(GEM_CONTROL_STATE, SECSComm.UINT_2_TYPE, CONTROL_STATE)
+            ConnectionState = 1
+            Pre_ControlState = CONTROL_STATE
+
+            Dim SCSTATE As UInt16 = 0
+            comQGWrapper.GetSV(GEM_SC_STATE, SECSComm.UINT_2_TYPE, SCSTATE)
+            Pre_SCState = SCSTATE
+            'Me.lbl_SECSConnectState.Text = "Connection"
+            ' Me.lbl_SECSConnectState.BackColor = Color.GreenYellow
+        ElseIf lMsgID = QS_EVENT_DISCONNECTED Then
+            'Ver:4.10
+            ' lbl_SECSConnectState.Text = "Disconnection(Stop)"
+            'lbl_SECSConnectState.BackColor = Color.Red
+            ConnectionState = 0
+            setCommtext("MCS¬_Ωu")
+        ElseIf lMsgID = 15 Then
+            settext("Link test")
+        ElseIf lMsgID = QS_EVENT_REPLY_TIMEOUT Then
+
+        End If
+
+    End Sub
+    Private Sub comQGWrapper_QGEvent(ByVal lID As Integer, ByVal S As Integer, ByVal F As Integer, ByVal W_Bit As Integer, ByVal SystemBytes As UInteger, ByVal RawData As Object, ByVal Length As Integer) Handles comQGWrapper.QGEvent
+        'ShowSECSIIMessage RawData
+
+
+
+        If lID = 1 Then
+            If Not RawData Is Nothing Then
+                Try
+                    ShowSECSIIMessage(RawData)
+                Catch ex As Exception
+                    setCommtext(SystemBytes.ToString + "∞e•X•¢±—")
+                    Exit Sub
+
+                End Try
+
+
+
+            End If
+
+        ElseIf lID = 2 Then
+            'transfer event
+
+        End If
+
+        comQSWrapper.SendSECSIIMessage(S, F, W_Bit, SystemBytes, RawData, Length)
+        setCommtext(SystemBytes.ToString + "∞e•XS" + S.ToString + "F" + F.ToString + " len:" + Length.ToString)
+    End Sub
+    Function Seach_Tagid(ByVal Loc As String)
+        Dim point As New Tag_Point
+        For i As Integer = 0 To Tag_point_list.Length - 1
+            If Tag_point_list(i).LOC = Loc Then
+                point = Tag_point_list(i)
+
+            End If
+        Next
+        Return point
+    End Function
     Public Sub ListenCmd()
         Dim myTCPlistenter As TcpListener
         Dim icount As Integer = 0
-        Dim iport As Integer = CInt(LPort.Text) + 1000
+        Dim iport As Integer = CInt(LPort.Text) + 2000
         myTCPlistenter = New TcpListener(IPAddress.Any, iport)
         Dim Clientsocket As Socket
         myTCPlistenter.Start()
@@ -86,7 +553,7 @@ Public Class Form1
                 ' Dim myobj As New Car_point
                 'myobj.idx = icount
 
-                settext("Port:" + iport.ToString + "Êúâ‰∏ÄCMDÈÄ£Á∑ö" + IPAddress.Parse(CType(Clientsocket.RemoteEndPoint, IPEndPoint).Address.ToString()).ToString + vbCrLf, True)
+                settext("Port:" + iport.ToString + "¶≥§@CMD≥sΩu" + IPAddress.Parse(CType(Clientsocket.RemoteEndPoint, IPEndPoint).Address.ToString()).ToString + vbCrLf, True)
                 Dim ReceiveThread As New Thread(AddressOf ReceiveCmd)
                 ReceiveThread.IsBackground = True
                 ReceiveThread.Start(Clientsocket)
@@ -107,14 +574,13 @@ Public Class Form1
         Try
             While 1
                 cnt = cmd_stream.read(wByte, 0, 100)
-
                 cmd = System.Text.Encoding.Unicode.GetString(wByte)
 
                 ' MsgBox(cmd)
                 If cmd.StartsWith("$") Then
                     cmd_list = cmd.Substring(1).TrimEnd(vbCrLf).Split(",")
                     If cmd_list.Length = 2 Then
-                        'Âà§Êñ∑ÊòØÂê¶Â≠òÂú®ÊñºË≥áÊñôÂ∫´ÂÖß
+                        'ßP¬_¨Oß_¶s¶b©Û∏ÍÆ∆Æw§∫
                         idx = 999
 
                         For i As Integer = 0 To Car.Length
@@ -128,22 +594,17 @@ Public Class Form1
                             rt_cmd = "$" + cmd_list(0) + "," + "999" + vbCrLf
                         ElseIf cmd_list(1).StartsWith("?") Then
                             rt_cmd = "$" + cmd_list(0) + "," + Car(idx).device_status(18).ToString + vbCrLf
-                        ElseIf cmd_list(1).StartsWith("1") Then
-                            'Áï∞Â∏∏
+                        ElseIf cmd_list(1).StartsWith("1000") Then
+                            '≤ß±`
                             If Car(idx).device_status(18) = 0 Then
-                                Try
-                                    Car(idx).To_AGV(20) = CInt(cmd_list(1))
-                                Catch ex As Exception
-                                    Car(idx).To_AGV(20) = 1000
-                                End Try
-
+                                Car(idx).To_AGV(20) = 1000
                                 rt_cmd = "$" + cmd_list(0) + "," + "1" + vbCrLf
                             Else
                                 rt_cmd = "$" + cmd_list(0) + "," + "0" + vbCrLf
 
                             End If
                         ElseIf cmd_list(1).StartsWith("0") Then
-                            'Âæ©Ê≠∏
+                            '¥_¬k
                             If Car(idx).device_status(18) = 1000 Then
                                 Car(idx).To_AGV(20) = 0
                                 rt_cmd = "$" + cmd_list(0) + "," + "1" + vbCrLf
@@ -193,7 +654,7 @@ Public Class Form1
                 ' Dim myobj As New Car_point
                 'myobj.idx = icount
 
-                settext("Port:" + iport.ToString + "Êúâ‰∏ÄÊñ∞ÈÄ£Á∑ö" + IPAddress.Parse(CType(Clientsocket.RemoteEndPoint, IPEndPoint).Address.ToString()).ToString + vbCrLf, True)
+                settext("Port:" + iport.ToString + "¶≥§@∑s≥sΩu" + IPAddress.Parse(CType(Clientsocket.RemoteEndPoint, IPEndPoint).Address.ToString()).ToString + vbCrLf, True)
 
                 Dim ReceiveThread As New Thread(AddressOf ReceiveData)
                 ReceiveThread.IsBackground = True
@@ -215,7 +676,7 @@ Public Class Form1
             If (Clientsocket.Connected) Then
                 ' Dim myobj As New Car_point
                 'myobj.idx = icount
-                settext("Port:" + (iport + 1).ToString + "Êúâ‰∏ÄÊñ∞ÈÄ£Á∑ö" + IPAddress.Parse(CType(Clientsocket.RemoteEndPoint, IPEndPoint).Address.ToString()).ToString + vbCrLf, True)
+                settext("Port:" + (iport + 1).ToString + "¶≥§@∑s≥sΩu" + IPAddress.Parse(CType(Clientsocket.RemoteEndPoint, IPEndPoint).Address.ToString()).ToString + vbCrLf, True)
                 Dim ReceiveThread As New Thread(AddressOf ReceiveData)
                 ReceiveThread.IsBackground = True
                 ReceiveThread.Start(Clientsocket)
@@ -231,12 +692,13 @@ Public Class Form1
         Dim R_str As String = ""
         Dim Temp_str As String = ""
         Dim Car_pic As PictureBox = New PictureBox
-        Dim stste As Car_point = New Car_point(100, 100, Car_pic)
+        Dim stste As Car_point = New Car_point(100, 100)
         Dim status(50) As Byte
         Dim read_int(1) As Integer
         Dim flag As Boolean = False
         Dim idx As Integer = 0
         Dim this_thread_idx As String = ""
+        Dim bms1flag As Boolean = False
         Dim bms1(15), bms2(15) As Integer
         read_int(0) = 0
         read_int(1) = 0
@@ -245,74 +707,69 @@ Public Class Form1
         stste.flag = False
         stste.econ_stream.ReadTimeout = 400
         stste.econ_stream.WriteTimeout = 400
-        'ÊêúÂ∞ãÈõ¢Á∑öÁöÑËªä
-        For i = 0 To car_no
+        Thread.Sleep(2000)
+        '∑j¥M¬˜Ωu™∫®Æ
+        For i = 0 To car_no - 1
             If Car(i).status = -2 And Car(i).device_no > 0 Then
-
-                settext("ËÆÄÂèñ" + Car(i).device_no.ToString + "ËôüËªä" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
+                settext("≈™®˙" + Car(i).device_no.ToString + "∏π®Æ" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
                 If modbus_read(stste.econ_stream, Car(i).device_no, 200, 1, read_int) Then
                     stste.flag = True
                     stste.connected = True
                     stste.device_no = Car(i).device_no
-                    stste.device_status = Car(i).device_status
+                    stste.subcmd = Car(i).subcmd
+                    stste.device_status = Car(i).device_status.Clone
                     stste.Car_type = Car(i).Car_type
-                    stste.Chrage_Point = Car(i).Chrage_Point
+                    stste.Recharge_Point_list = Car(i).Recharge_Point_list
                     stste.wait_point = Car(i).wait_point
                     stste.Block_Point = Car(i).Block_Point
+                    stste.Block_Path = Car(i).Block_Path
                     stste.RollData = Car(i).RollData
-                    stste.Chrage_volt = Car(i).Chrage_volt
-                    stste.SafeSensor = Car(i).SafeSensor
-                    stste.Compass = Car(i).Compass
-
-                    stste.AutoCharge = Car(i).AutoCharge
-                    stste.AutoChargeVal = Car(i).AutoChargeVal
-                    stste.Site = Car(i).Site
+                    stste.Recharge_volt = Car(i).Recharge_volt
                     stste.Recharge_SOC = Car(i).Recharge_SOC
-                    stste.Recharge_Point = Car(i).Recharge_Point
+                    stste.SafeSensor = Car(i).SafeSensor
+                    stste.Site = Car(i).Site
+                    stste.width = Car(i).width
+                    stste.height = Car(i).height
+                    stste.ReverseXY = Car(i).ReverseXY
+                    stste.offset_X = Car(i).offset_X
+                    stste.offset_Y = Car(i).offset_Y
                     stste.Lock_user = Car(i).Lock_user
-                    stste.slam = Car(i).slam
+                    For j As Integer = 0 To 49
+                        stste.warning(j) = AutoReset(j)
+                    Next
+                    stste.MaxPath = Car(i).MaxPath
+
+                    stste.RePath = Car(i).RePath
+                    stste.RetreatPath = Car(i).RetreatPath
                     ' MsgBox(i)
                     stste.step_i = 999
-
-                    stste.ipadress = IPAddress.Parse(CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString()).ToString
                     modbus_read(stste.econ_stream, Car(i).device_no, 3053, 16, bms1)
-                    Thread.Sleep(1000)
                     modbus_read(stste.econ_stream, Car(i).device_no, 3153, 16, bms2)
-                    Thread.Sleep(1000)
-                    modbus_read(stste.econ_stream, Car(i).device_no, 3053, 16, bms1)
                     stste.BMS_fw = int2bytestr(bms1, 0, 16) + " " + int2bytestr(bms2, 0, 16)
-                    settext(Car(i).device_no.ToString + "ËôüËªäÔºåÈõªÊ±†ÁâàÊú¨" + stste.BMS_fw)
                     settext("AGV" + stste.device_no.ToString + " BMS1:" + int2str(bms1, 0, 16))
                     settext("AGV" + stste.device_no.ToString + " BMS2:" + int2str(bms2, 0, 16))
-
+                    settext(Car(i).device_no.ToString + "∏π®Æ°Aπq¶¿™©•ª" + stste.BMS_fw)
+                    stste.ipadress = IPAddress.Parse(CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString()).ToString
                     If Car(i).flag = True Then
-                        'Êñ∑Á∑öÈáçÈÄ£  
+                        '¬_Ωu≠´≥s  
                         Car(i).econ_stream = stste.econ_stream
                         Car(i).econ_Socket = stste.econ_Socket
                         Car(i).ipadress = stste.ipadress
-                        settext(stste.device_no.ToString + "ËôüËªäÊñ∑Á∑öÈáçÈÄ£" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
+                        settext(stste.device_no.ToString + "∏π®Æ¬_Ωu≠´≥s" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
                     Else
-                        'Áï∞Â∏∏Âæ©Ê≠∏ÊàñÊòØÂàùÊ¨°‰∏äÁ∑ö  
-                        settext(stste.device_no.ToString + "ËôüËªä‰∏äÁ∑ö" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
+                        '≤ß±`¥_¬k©Œ¨O™Ï¶∏§WΩu  
+                        settext(stste.device_no.ToString + "∏π®Æ§WΩu" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
                         stste.step_i = 999
                         ' stste.set_tagid(Tag_ID_List)
                         stste.online = Car(i).online
-                        stste.Car_Picbox = Car(i).Car_Picbox
+                        ' stste.Car_Picbox = Car(i).Car_Picbox
                         Car(i) = stste
-
-
                     End If
-                    Car(i).bat_sn(0) = int2bytestr(bms1, 0, 16)
-                    Car(i).bat_sn(1) = int2bytestr(bms2, 0, 16)
-                    ReDim Car(i).BMS1(52)
-                    ReDim Car(i).BMS2(52)
-                    ReDim Car(i).BMS3(52)
                     Car(i).BMS_fw = stste.BMS_fw
+                    Car(i).bat_SN(0) = int2bytestr(bms1, 0, 16)
+                    Car(i).bat_SN(1) = int2bytestr(bms2, 0, 16)
                     Car(i).Read_Err_Count = 0
                     Car(i).thread_idx = Now.ToString("yyyyMMddHHmmssfff")
-                    Car(i).Misstagid_Flag = False
-                    Car(i).Tag_Point_dict = Tag_point_Dictionary
-
                     this_thread_idx = Car(i).thread_idx
                     settext("thread_idx=" + this_thread_idx)
 
@@ -320,85 +777,89 @@ Public Class Form1
                     flag = True
                     Exit For
                 Else
-                    settext("ËÆÄÂèñ" + Car(i).device_no.ToString + "ËôüËªä Êú™ÂõûÊáâ" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
+                    settext("≈™®˙" + Car(i).device_no.ToString + "∏π®Æ •º¶^¿≥" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
                 End If
             End If
 
         Next
-        'ÂÖ®ÈÉ®ËªäÂ≠êÊêúÂ∞ã
+        '•˛≥°®Æ§l∑j¥M
         If flag = False Then
-            settext("Â∑≤‰∏äÁ∑öËªäËºõËÆÄÂèñÂ§±ÊïóÔºåÂÖ®ÈÉ®ËªäËºõÈáçÊñ∞ËÆÄÂèñ" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
+            settext("§w§WΩu®ÆΩ¯≈™®˙•¢±—°A•˛≥°®ÆΩ¯≠´∑s≈™®˙" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
 
-            For i = 0 To car_no
+            For i = 0 To car_no - 1
                 If Car(i).device_no > 0 Then
 
-                    settext("ËÆÄÂèñ" + Car(i).device_no.ToString + "ËôüËªä" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
-                    If modbus_read(stste.econ_stream, Car(i).device_no, 200, 1, read_int) Then
-                        stste.flag = True
-                        stste.connected = True
-                        stste.device_no = Car(i).device_no
-                        stste.Car_type = Car(i).Car_type
-                        stste.Chrage_Point = Car(i).Chrage_Point
-                        stste.wait_point = Car(i).wait_point
-                        stste.Block_Point = Car(i).Block_Point
-                        stste.RollData = Car(i).RollData
-                        stste.Chrage_volt = Car(i).Chrage_volt
-                        stste.SafeSensor = Car(i).SafeSensor
-                        stste.Compass = Car(i).Compass
+                    settext("≈™®˙" + Car(i).device_no.ToString + "∏π®Æ" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
+                    For k As Integer = 0 To 2
 
-                        stste.AutoCharge = Car(i).AutoCharge
-                        stste.AutoChargeVal = Car(i).AutoChargeVal
-                        stste.Site = Car(i).Site
-                        stste.Recharge_SOC = Car(i).Recharge_SOC
-                        stste.Recharge_Point = Car(i).Recharge_Point
-                        stste.Lock_user = Car(i).Lock_user
-                        stste.slam = Car(i).slam
-                        ' MsgBox(i)
-                        stste.step_i = 999
-                        modbus_read(stste.econ_stream, Car(i).device_no, 3053, 16, bms1)
-                        Thread.Sleep(1000)
-                        modbus_read(stste.econ_stream, Car(i).device_no, 3153, 16, bms2)
-                        Thread.Sleep(1000)
-                        modbus_read(stste.econ_stream, Car(i).device_no, 3053, 16, bms1)
-                        stste.BMS_fw = int2bytestr(bms1, 0, 16) + " " + int2bytestr(bms2, 0, 16)
-                        settext("AGV" + stste.device_no.ToString + " BMS1:" + int2str(bms1, 0, 16))
-                        settext("AGV" + stste.device_no.ToString + " BMS2:" + int2str(bms2, 0, 16))
-                        settext(Car(i).device_no.ToString + "ËôüËªäÔºåÈõªÊ±†ÁâàÊú¨" + stste.BMS_fw)
-                        stste.ipadress = IPAddress.Parse(CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString()).ToString
-                        If Car(i).flag = True Then
-                            'Êñ∑Á∑öÈáçÈÄ£  
-                            Car(i).econ_stream = stste.econ_stream
-                            Car(i).econ_Socket = stste.econ_Socket
-                            Car(i).ipadress = stste.ipadress
-                            settext(stste.device_no.ToString + "ËôüËªäÊñ∑Á∑öÈáçÈÄ£" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
-                        Else
-                            'Áï∞Â∏∏Âæ©Ê≠∏ÊàñÊòØÂàùÊ¨°‰∏äÁ∑ö  
-                            settext(stste.device_no.ToString + "ËôüËªä‰∏äÁ∑ö" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
+
+                        If modbus_read(stste.econ_stream, Car(i).device_no, 200, 1, read_int) Then
+                            stste.flag = True
+                            stste.connected = True
+                            stste.device_no = Car(i).device_no
+                            stste.subcmd = Car(i).subcmd
+                            stste.device_status = Car(i).device_status.Clone
+                            stste.Car_type = Car(i).Car_type
+                            stste.Recharge_Point_list = Car(i).Recharge_Point_list
+                            stste.wait_point = Car(i).wait_point
+                            stste.Block_Point = Car(i).Block_Point
+                            stste.Block_Path = Car(i).Block_Path
+                            stste.RollData = Car(i).RollData
+                            stste.Recharge_volt = Car(i).Recharge_volt
+                            stste.Recharge_SOC = Car(i).Recharge_SOC
+                            stste.SafeSensor = Car(i).SafeSensor
+                            stste.Site = Car(i).Site
+                            stste.width = Car(i).width
+                            stste.height = Car(i).height
+                            stste.ReverseXY = Car(i).ReverseXY
+                            stste.offset_X = Car(i).offset_X
+                            stste.offset_Y = Car(i).offset_Y
+                            stste.Lock_user = Car(i).Lock_user
+                            For j As Integer = 0 To 49
+                                stste.warning(j) = AutoReset(j)
+                            Next
+                            stste.MaxPath = Car(i).MaxPath
+                            stste.RePath = Car(i).RePath
+                            stste.RetreatPath = Car(i).RetreatPath
+                            ' MsgBox(i)
+
                             stste.step_i = 999
-                            ' stste.set_tagid(Tag_ID_List)
-                            stste.online = Car(i).online
-                            stste.Car_Picbox = Car(i).Car_Picbox
-                            Car(i) = stste
+                            modbus_read(stste.econ_stream, Car(i).device_no, 3053, 16, bms1)
+                            modbus_read(stste.econ_stream, Car(i).device_no, 3153, 16, bms2)
+                            stste.BMS_fw = int2bytestr(bms1, 0, 16) + " " + int2bytestr(bms2, 0, 16)
+                            settext(Car(i).device_no.ToString + "∏π®Æ°Aπq¶¿™©•ª" + stste.BMS_fw)
+                            settext("AGV" + stste.device_no.ToString + " BMS1:" + int2str(bms1, 0, 16))
+                            settext("AGV" + stste.device_no.ToString + " BMS2:" + int2str(bms2, 0, 16))
+                            stste.ipadress = IPAddress.Parse(CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString()).ToString
+                            If Car(i).flag = True Then
+                                '¬_Ωu≠´≥s  
+                                Car(i).econ_stream = stste.econ_stream
+                                Car(i).econ_Socket = stste.econ_Socket
+                                Car(i).ipadress = stste.ipadress
+                                settext(stste.device_no.ToString + "∏π®Æ¬_Ωu≠´≥s" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
+                            Else
+                                '≤ß±`¥_¬k©Œ¨O™Ï¶∏§WΩu  
+                                settext(stste.device_no.ToString + "∏π®Æ§WΩu" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
+                                stste.step_i = 999
+                                ' stste.set_tagid(Tag_ID_List)
+                                stste.online = Car(i).online
+                                ' stste.Car_Picbox = Car(i).Car_Picbox
+                                Car(i) = stste
+                            End If
+                            Car(i).Read_Err_Count = 0
+                            Car(i).thread_idx = Now.ToString("yyyyMMddHHmmssfff")
+                            Car(i).BMS_fw = stste.BMS_fw
+                            Car(i).bat_SN(0) = int2bytestr(bms1, 0, 16)
+                            Car(i).bat_SN(1) = int2bytestr(bms2, 0, 16)
+                            this_thread_idx = Car(i).thread_idx
+                            settext("thread_idx=" + this_thread_idx)
+                            idx = i
+                            flag = True
+                            Exit For
+                        Else
+                            settext("≈™®˙" + Car(i).device_no.ToString + "∏π®Æ •º¶^¿≥" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
                         End If
-                        Car(i).bat_sn(0) = int2bytestr(bms1, 0, 16)
-                        Car(i).bat_sn(1) = int2bytestr(bms2, 0, 16)
-                        ReDim Car(i).BMS1(52)
-                        ReDim Car(i).BMS2(52)
-                        ReDim Car(i).BMS3(52)
-                        Car(i).BMS_fw = stste.BMS_fw
-                        Car(i).Read_Err_Count = 0
-                        Car(i).thread_idx = Now.ToString("yyyyMMddHHmmssfff")
-                        Car(i).Misstagid_Flag = False
-                        Car(i).Tag_Point_dict = Tag_point_Dictionary
-
-                        this_thread_idx = Car(i).thread_idx
-                        settext("thread_idx=" + this_thread_idx)
-                        idx = i
-                        flag = True
-                        Exit For
-                    Else
-                        settext("ËÆÄÂèñ" + Car(i).device_no.ToString + "ËôüËªä Êú™ÂõûÊáâ" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString(), True)
-                    End If
+                    Next
                 End If
             Next
         End If
@@ -407,17 +868,18 @@ Public Class Form1
             Dim oConn As MySqlConnection
             Dim sqlCommand As New MySqlCommand
             Dim Query As String = ""
-            ''---------------------‰∏äÁ∑öÁ¥ÄÈåÑ
+            ''---------------------§WΩu¨ˆø˝
             Try
                 oConn = New MySqlConnection(Mysql_str)
                 oConn.Open()
                 Try
                     sqlCommand.Connection = oConn
-                    Query = "INSERT INTO `agv_event` (`Car_No` ,`Event` ,`Event_Time` ,`Tag_ID` ,`IP_Addr`,cmd_idx,Battery) VALUES ('" + Car(idx).device_no.ToString + "', 'ONLINE', now(), " + Car(idx).get_tagId.ToString + ", '" + Car(idx).ipadress.ToString + "', " + Car(idx).cmd_sql_idx.ToString + ",'" + Car(idx).BMS_fw.ToString + "');"
+                    Query = "INSERT INTO `agv_event` (`Car_No` ,`Event` ,`Event_Time` ,`Tag_ID` ,`IP_Addr`,cmd_idx,Battery)VALUES ('" + Car(idx).device_no.ToString + "', 'ONLINE', now(), " + Car(idx).get_tagId.ToString + ", '" + Car(idx).ipadress.ToString + "', " + Car(idx).cmd_sql_idx.ToString + ",'" + Car(idx).BMS_fw.ToString + "');"
                     sqlCommand.CommandText = Query
                     sqlCommand.ExecuteNonQuery()
 
-                    Query = "UPDATE  `agv`.`agv_list` SET  `bat_SN1` =  '" + Car(idx).bat_sn(0) + "' , `bat_SN2` =  '" + Car(idx).bat_sn(1) + "'  WHERE  `agv_list`.`AGVNo` =  '" + Car(idx).device_no.ToString + "';"
+
+                    Query = "update agv_list set bat_SN1='" + Car(idx).bat_SN(0) + "',bat_SN2='" + Car(idx).bat_SN(1) + "' where AGVNo='" + Car(idx).device_no.ToString + "' ;"
                     sqlCommand.CommandText = Query
                     sqlCommand.ExecuteNonQuery()
 
@@ -430,7 +892,7 @@ Public Class Form1
             Catch ex As Exception
 
             End Try
-            ''---------------------‰∏äÁ∑öÁ¥ÄÈåÑ
+            ''---------------------§WΩu¨ˆø˝
             While Car(idx).Read_Err_Count < 100
                 If this_thread_idx = Car(idx).thread_idx Then
 
@@ -442,11 +904,11 @@ Public Class Form1
                         settext(Car(idx).device_no.ToString + ":" + doworklog, True, Car(idx).device_no)
                     End If
 
-                    Thread.Sleep(200)
+                    Thread.Sleep(100)
                 Else
                     settext("thread_idx=:" + this_thread_idx.ToString + "->" + Car(idx).thread_idx)
                     Try
-                        settext("ÁµêÊùüÂü∑Ë°åÁ∑í:" + stste.device_no.ToString + ":" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString())
+                        settext("µ≤ßÙ∞ı¶Ê∫¸:" + stste.device_no.ToString + ":" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString())
                         Client_socket.Close()
 
                     Catch ex As Exception
@@ -455,22 +917,29 @@ Public Class Form1
                     Exit While
                 End If
             End While
-            settext("ÁµêÊùüÂü∑Ë°åÁ∑íEND")
+            settext("µ≤ßÙ∞ı¶Ê∫¸END")
+            Try
+                stste.econ_stream.Close()
+                stste.econ_Socket.Close()
+                settext("•ºß‰®Ï≥]≥∆ √ˆ≥¨≥sΩu:" + stste.device_no.ToString + ":" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString())
+            Catch ex As Exception
 
+            End Try
         Else
             Try
                 stste.econ_stream.Close()
                 stste.econ_Socket.Close()
-                settext("Êú™ÊâæÂà∞Ë®≠ÂÇô ÈóúÈñâÈÄ£Á∑ö:" + stste.device_no.ToString + ":" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString())
+                settext("•ºß‰®Ï≥]≥∆ √ˆ≥¨≥sΩu:" + stste.device_no.ToString + ":" + CType(socket_Client.RemoteEndPoint, IPEndPoint).Address.ToString())
             Catch ex As Exception
 
             End Try
         End If
     End Sub
     Dim car_comm_idx As Integer = 0
+    ' Dim bms_cnt As Integer = 0
     Private Sub Timer1_Tick(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles MainBG_timer.Tick
 
-        TextBox5.Text = BackString
+
         Dim oConn As MySqlConnection
         Dim sqlCommand As New MySqlCommand
         Dim Query = ""
@@ -484,10 +953,10 @@ Public Class Form1
         Dim i As Integer
 
 
-    
-      
-        ' ÂèñÂæóË≥áÊñôX,Y
-        For i = 0 To car_no
+
+
+        ' ®˙±o∏ÍÆ∆X,Y
+        For i = 0 To car_no - 1
             If Car(i).flag Then
                 status_log(i)
             End If
@@ -496,87 +965,140 @@ Public Class Form1
 
         If Car(view_car_idx).flag = True Then
 
-            For i = 0 To 25
+
+
+            For i = 0 To 49
                 Dim TextBox As TextBox = Me.Controls.Find("Econ_" + i.ToString(), True)(0)
                 If Not Car(view_car_idx).device_status Is Nothing Then
-                    If Car(view_car_idx).device_status(i) > 42000 Then
-                        TextBox.Text = (Car(view_car_idx).device_status(i) - 65536).ToString
-                    Else
-                        TextBox.Text = Car(view_car_idx).device_status(i).ToString
-                    End If
-
+                    TextBox.Text = Car(view_car_idx).device_status(i).ToString
                 End If
             Next
+            For i = 1 To 4
+                For j As Integer = 0 To 15
+                    Dim lab As Label = Me.Controls.Find("AGVIO" + i.ToString + "_" + j.ToString.PadLeft(2, "0"), True)(0)
+                    Dim val As Integer = (Car(view_car_idx).device_status(29 + i) >> j) Mod 2
+                    If val = 1 Then
+                        lab.BackColor = Color.LightGreen
+                    Else
+                        lab.BackColor = Color.Gray
+                    End If
+
+
+                Next
+            Next
+
+            CstID.Text = Car(view_car_idx).get_cstid
+
             For i = 0 To 20
                 Dim TextBox As TextBox = Me.Controls.Find("txtToAGV" + i.ToString(), True)(0)
                 If Not Car(view_car_idx).To_AGV Is Nothing Then
                     TextBox.Text = Car(view_car_idx).To_AGV(i).ToString
                 End If
             Next
+            If Car(view_car_idx).BMS1(7) > 100 And Car(view_car_idx).BMS1(7) < 7000 Then
 
-            If Car(view_car_idx).BMS1(7) > 1200 And Car(view_car_idx).BMS1(7) < 7000 Then
 
+                TextBox11.Text = "πq¶¿™©•ª" + Car(view_car_idx).BMS_fw + vbCrLf
 
-                TextBox4.Text = ""
                 For i = 0 To 52
-                    TextBox4.Text += Car(view_car_idx).BMS1(i).ToString + " "
-                    If i Mod 9 = 0 Then
-                        TextBox4.Text += vbCrLf
+                    TextBox11.Text += Car(view_car_idx).BMS1(i).ToString + " "
+                    If i = 6 Or i = 17 Or i = 34 Or i = 42 Then
+                        TextBox11.Text += vbCrLf
                     End If
 
                 Next
-                TextBox4.Text += vbCrLf
-                TextBox4.Text += "SOC:" + Car(view_car_idx).BMS1(14).ToString.ToString
-                TextBox4.Text += "ÈõªÂ£ì:" + Car(view_car_idx).BMS1(7).ToString.ToString
+                TextBox11.Text += vbCrLf
+                TextBox11.Text += "πq¿£:" + Car(view_car_idx).BMS1(7).ToString.ToString
                 If Car(view_car_idx).BMS1(8) > 32765 Then
-                    TextBox4.Text += "ÊîæÈõª:" + (65535 - Car(view_car_idx).BMS1(8)).ToString.ToString
+                    TextBox11.Text += "©Òπq:" + (65535 - Car(view_car_idx).BMS1(8)).ToString.ToString
                 Else
-                    TextBox4.Text += "ÂÖÖÈõª:" + Car(view_car_idx).BMS1(8).ToString.ToString
+                    TextBox11.Text += "•Rπq:" + Car(view_car_idx).BMS1(8).ToString.ToString
                 End If
-                TextBox4.Text += "Ê∫´Â∫¶:" + Car(view_car_idx).BMS1(10).ToString.ToString + "," + Car(view_car_idx).BMS1(11).ToString.ToString + "," + Car(view_car_idx).BMS1(12).ToString.ToString + vbCrLf
+                TextBox11.Text += "∑≈´◊:" + Car(view_car_idx).BMS1(10).ToString.ToString + "," + Car(view_car_idx).BMS1(11).ToString.ToString + "," + Car(view_car_idx).BMS1(12).ToString.ToString + vbCrLf
+                TextBox11.Text += "§ﬂ∏ı¿À¥˙:" + Car(view_car_idx).BMSAlarm1(17).ToString + vbCrLf
+                For i = 0 To 52
+                    TextBox11.Text += Car(view_car_idx).BMS2(i).ToString + " "
+                    If i = 6 Or i = 17 Or i = 34 Or i = 42 Then
+                        TextBox11.Text += vbCrLf
+                    End If
+
+                Next
+                TextBox11.Text += vbCrLf
+                TextBox11.Text += "πq¿£:" + Car(view_car_idx).BMS2(7).ToString.ToString
+                If Car(view_car_idx).BMS2(8) > 32765 Then
+                    TextBox11.Text += "©Òπq:" + (65535 - Car(view_car_idx).BMS2(8)).ToString.ToString
+                Else
+                    TextBox11.Text += "•Rπq:" + Car(view_car_idx).BMS2(8).ToString.ToString
+                End If
+                TextBox11.Text += "∑≈´◊:" + Car(view_car_idx).BMS2(10).ToString.ToString + "," + Car(view_car_idx).BMS2(11).ToString.ToString + "," + Car(view_car_idx).BMS2(12).ToString.ToString + vbCrLf
+                TextBox11.Text += "§ﬂ∏ı¿À¥˙:" + Car(view_car_idx).BMSAlarm2(17).ToString + vbCrLf
+                'If Not Car(view_car_idx).device_status Is Nothing Then
+                '    Econ_20.Text = Err_code(Car(view_car_idx).device_status(20))
+                'End If
+            End If
+            If ChargerClient(view_charger_idx).BMS1(7) > 100 And ChargerClient(view_charger_idx).BMS1(7) < 7000 Then
+
+
+                TextBox11.Text = "πq¶¿™©•ª" + ChargerClient(view_charger_idx).SN1 + ChargerClient(view_charger_idx).SN2 + vbCrLf
+
+                For i = 0 To 49
+                    TextBox11.Text += ChargerClient(view_charger_idx).BMS1(i).ToString + " "
+                    If i = 6 Or i = 17 Or i = 34 Or i = 42 Then
+                        TextBox11.Text += vbCrLf
+                    End If
+
+                Next
+                TextBox11.Text += vbCrLf
+                TextBox11.Text += "πq¿£:" + ChargerClient(view_charger_idx).BMS1(7).ToString.ToString
+                If ChargerClient(view_charger_idx).BMS1(8) > 32765 Then
+                    TextBox11.Text += "©Òπq:" + (65535 - ChargerClient(view_charger_idx).BMS1(8)).ToString.ToString
+                Else
+                    TextBox11.Text += "•Rπq:" + ChargerClient(view_charger_idx).BMS1(8).ToString.ToString
+                End If
+                TextBox11.Text += "∑≈´◊:" + ChargerClient(view_charger_idx).BMS1(10).ToString.ToString + "," + ChargerClient(view_charger_idx).BMS1(11).ToString.ToString + "," + ChargerClient(view_charger_idx).BMS1(12).ToString.ToString + vbCrLf
+
+                For i = 0 To 49
+                    TextBox11.Text += ChargerClient(view_charger_idx).BMS2(i).ToString + " "
+                    If i = 6 Or i = 17 Or i = 34 Or i = 42 Then
+                        TextBox11.Text += vbCrLf
+                    End If
+
+                Next
+                TextBox11.Text += vbCrLf
+                TextBox11.Text += "πq¿£:" + ChargerClient(view_charger_idx).BMS2(7).ToString.ToString
+                If Car(view_car_idx).BMS2(8) > 32765 Then
+                    TextBox11.Text += "©Òπq:" + (65535 - ChargerClient(view_charger_idx).BMS2(8)).ToString.ToString
+                Else
+                    TextBox11.Text += "•Rπq:" + ChargerClient(view_charger_idx).BMS2(8).ToString.ToString
+                End If
+                TextBox11.Text += "∑≈´◊:" + ChargerClient(view_charger_idx).BMS2(10).ToString.ToString + "," + ChargerClient(view_charger_idx).BMS2(11).ToString.ToString + "," + ChargerClient(view_charger_idx).BMS2(12).ToString.ToString + vbCrLf
 
                 'If Not Car(view_car_idx).device_status Is Nothing Then
                 '    Econ_20.Text = Err_code(Car(view_car_idx).device_status(20))
                 'End If
             End If
-            If Car(view_car_idx).BMS2(7) > 1200 And Car(view_car_idx).BMS2(7) < 7000 Then
-                For i = 0 To 52
-                    TextBox4.Text += Car(view_car_idx).BMS2(i).ToString + " "
-                    If i Mod 9 = 0 Then
-                        TextBox4.Text += vbCrLf
-                    End If
-
-                Next
-                TextBox4.Text += vbCrLf
-                TextBox4.Text += "SOC:" + Car(view_car_idx).BMS2(14).ToString.ToString
-
-                TextBox4.Text += "ÈõªÂ£ì:" + Car(view_car_idx).BMS2(7).ToString.ToString
-                If Car(view_car_idx).BMS2(8) > 32765 Then
-                    TextBox4.Text += "ÊîæÈõª:" + (65535 - Car(view_car_idx).BMS2(8)).ToString.ToString
-                Else
-                    TextBox4.Text += "ÂÖÖÈõª:" + Car(view_car_idx).BMS2(8).ToString.ToString
-                End If
-                TextBox4.Text += "Ê∫´Â∫¶:" + Car(view_car_idx).BMS2(10).ToString.ToString + "," + Car(view_car_idx).BMS2(11).ToString.ToString + "," + Car(view_car_idx).BMS2(12).ToString.ToString + vbCrLf
-            End If
-            'If Not Car(view_car_idx).device_status Is Nothing Then
-            '    Econ_20.Text = Err_code(Car(view_car_idx).device_status(20))
-            'End If
         End If
 
         'Me.AxActEasyIF1.State
-        For j As Integer = 0 To car_no
+        For j As Integer = 0 To car_no - 1
             If Not Car(j).get_tagId = 0 Then
-                If Tag_point_Dictionary.ContainsKey(Car(j).get_tagId Mod 10000) Then
-                    Car(j).Car_Picbox.Left = Tag_point_Dictionary(Car(j).get_tagId Mod 10000).X - 15 - offset_x
-                    Car(j).Car_Picbox.Top = Tag_point_Dictionary(Car(j).get_tagId Mod 10000).Y - 15 - offset_y
-                End If
+                For i = 0 To Tag_point_list.Length - 1
+                    If Car(j).get_tagId = Me.Tag_point_list(i).TagId Or Car(j).get_tagId - 10000 = Me.Tag_point_list(i).TagId Then
+                        If Car(j).Car_type = "CRANE" Then
+                        Else
+                            ' Car(j).AXIS_X = Me.Tag_point_list(i).X - 15 - offset_x
+                            ' Car(j).AXIS_Y = Me.Tag_point_list(i).Y - 15 - offset_y
+                        End If
+                    End If
+
+                Next
                 If Car(j).Car_type = "PIN" Then
                     If Car(j).get_Shelf_Car_No > 0 And Agvc_shelfcheck.Checked = True Then
                         For i = 0 To shelf_car.Length - 1
                             If shelf_car(i).Shelf_Car_No = Car(j).get_Shelf_Car_No Then
                                 shelf_car(i).LOCATION = Car(j).get_tagId
-                                shelf_car(i).car.Left = Car(j).Car_Picbox.Left
-                                shelf_car(i).car.Top = Car(j).Car_Picbox.Top + 15
+                                shelf_car(i).car.Left = Car(j).AXIS_X
+                                shelf_car(i).car.Top = Car(j).AXIS_Y + 15
                             End If
                         Next
                     End If
@@ -586,8 +1108,8 @@ Public Class Form1
                         For i = 0 To shelf_car.Length - 1
                             If shelf_car(i).Shelf_Car_No = Car(j).get_Shelf_Car_No Then
                                 shelf_car(i).LOCATION = Car(j).get_tagId
-                                shelf_car(i).car.Left = Car(j).Car_Picbox.Left
-                                shelf_car(i).car.Top = Car(j).Car_Picbox.Top + 15
+                                shelf_car(i).car.Left = Car(j).AXIS_X
+                                shelf_car(i).car.Top = Car(j).AXIS_Y + 15
                             End If
                         Next
                     End If
@@ -596,64 +1118,72 @@ Public Class Form1
             End If
         Next
         For i = 0 To Door_List.Length - 1
-            If Tag_point_Dictionary.ContainsKey(Door_List(i).tagid) And Door_List(i).tagid > 0 Then
-                Door_List(i).Door_Pic.Left = Tag_point_Dictionary(Door_List(i).tagid).X - 15 - offset_x
-                Door_List(i).Door_Pic.Top = Tag_point_Dictionary(Door_List(i).tagid).Y - 15 - offset_y
-            End If
+            For j As Integer = 0 To Tag_point_list.Length - 1
+                If Door_List(i).tagid = Me.Tag_point_list(j).TagId And Door_List(i).tagid > 0 Then
+                    Door_List(i).Door_Pic.Left = Me.Tag_point_list(j).X - 15 - offset_x
+                    Door_List(i).Door_Pic.Top = Me.Tag_point_list(j).Y - 15 - offset_y
+                End If
+            Next
+
         Next
         For i = 0 To LFT_List.Length - 1
-            If Tag_point_Dictionary.ContainsKey(LFT_List(i).tagid) And LFT_List(i).tagid > 0 Then
-                LFT_List(i).LFT_Pic.Left = Tag_point_Dictionary(LFT_List(i).tagid).X - 15 - offset_x
-                LFT_List(i).LFT_Pic.Top = Tag_point_Dictionary(LFT_List(i).tagid).Y - 15 - offset_y
-            End If
+            For j As Integer = 0 To Tag_point_list.Length - 1
+                If LFT_List(i).tagid = Me.Tag_point_list(j).TagId And LFT_List(i).tagid > 0 Then
+                    LFT_List(i).LFT_Pic.Left = Me.Tag_point_list(j).X - 15 - offset_x
+                    LFT_List(i).LFT_Pic.Top = Me.Tag_point_list(j).Y - 15 - offset_y
+                End If
+            Next
+
         Next
-        'OFFLINE ÁÅ∞
-        'OK Á∂†
-        'ERROR Á¥Ö
-        'RUN ÈªÉ
-        For i = 0 To car_no
-            Dim load_str As String = ""
-            If Car(i).get_loading = 3 And (Car(i).get_pin = 2 Or Car(i).get_pin = 6 Or Car(i).get_pin = 10 Or Car(i).Car_type = "LFT") Then
-                load_str = "_load"
-            End If
-            If (Car(i).flag = False Or Car(i).status = -2) Then
-                Car(i).Car_Picbox.Image = Image.FromFile("gray" + load_str + ".png")
-                Car(i).status = -2
-            ElseIf Car(i).status = 3 Then
-                'ÊâãÂãï
-                Car(i).Car_Picbox.Image = Image.FromFile("gray" + load_str + ".png")
-                Car(i).subcmd = Car(i).get_tagId.ToString
+        'OFFLINE ¶«
+        'OK ∫Ò
+        'ERROR ¨ı
+        'RUN ∂¿
+        For i = 0 To car_no - 1
+            'Dim load_str As String = ""
+            'If Car(i).get_loading = 3 And (Car(i).get_pin = 2 Or Car(i).get_pin = 6 Or Car(i).get_pin = 10 Or Car(i).Car_type = "LFT") Then
+            '    load_str = "_load"
+            'End If
+            'If (Car(i).flag = False Or Car(i).status = -2) Then
+            '    'Car(i).Car_Picbox.Image = Image.FromFile("gray" + load_str + ".png")
+            '    Car(i).status = -2
+            'ElseIf Car(i).status = 3 Then
+            '    '§‚∞ 
+            '    Car(i).Car_Picbox.Image = Image.FromFile("gray" + load_str + ".png")
+            '    Car(i).subcmd = Car(i).get_tagId.ToString
 
-            ElseIf (Car(i).status = 2 Or Car(i).status = 0) Then
-                Car(i).Car_Picbox.Image = Image.FromFile("green" + load_str + ".png")
-            ElseIf (Car(i).status = 4 Or Car(i).status = 1) Then
-                Car(i).Car_Picbox.Image = Image.FromFile("yellow" + load_str + ".png")
-            ElseIf (Car(i).status = -1) Then
-                Car(i).Car_Picbox.Image = Image.FromFile("red" + load_str + ".png")
-            End If
+            'ElseIf (Car(i).status = 2 Or Car(i).status = 0) Then
+            '    Car(i).Car_Picbox.Image = Image.FromFile("green" + load_str + ".png")
+            'ElseIf (Car(i).status = 4 Or Car(i).status = 1) Then
+            '    Car(i).Car_Picbox.Image = Image.FromFile("yellow" + load_str + ".png")
+            'ElseIf (Car(i).status = -1) Then
+            '    Car(i).Car_Picbox.Image = Image.FromFile("red" + load_str + ".png")
+            'End If
 
-            Dim bmp1 = New Bitmap(Car(i).Car_Picbox.Width, Car(i).Car_Picbox.Height)   'Áî¢ÁîüÂúñÂÉè
-            bmp1 = Car(i).Car_Picbox.Image
-            Dim g1 = Graphics.FromImage(bmp1) 'Áî¢ÁîüÁï´Â∏É
-            Dim mycolor1 As New SolidBrush(Color.FromArgb(255, 255, 255))   'ÂÆöÁæ©Â≠óÈ´îÈ°èËâ≤
-            g1.DrawString(Car(i).device_no.ToString, New Font("Microsoft JhengHei", 12, FontStyle.Regular), mycolor1, 5, 7) 'Áï´Â∏ÉÂØ´‰∏äÂ≠ó‰∏≤
-            Car(i).Car_Picbox.BackgroundImage = bmp1    'PictureBox1.ImageÊåáÂÆöË©≤ÂúñÂÉè
+            'Dim bmp1 = New Bitmap(Car(i).Car_Picbox.Width, Car(i).Car_Picbox.Height)   '≤£•Õπœπ≥
+            'bmp1 = Car(i).Car_Picbox.Image
+            'Dim g1 = Graphics.FromImage(bmp1) '≤£•Õµe•¨
+            'Dim mycolor1 As New SolidBrush(Color.FromArgb(255, 255, 255))   '©w∏q¶r≈È√C¶‚
+            'g1.DrawString(Car(i).device_no.ToString, New Font("Microsoft JhengHei", 12, FontStyle.Regular), mycolor1, 5, 7) 'µe•¨ºg§W¶r¶Í
+            'Car(i).Car_Picbox.BackgroundImage = bmp1    'PictureBox1.Image´¸©w∏”πœπ≥
 
 
             'If Car(i).Read_Err_Count > 1000 Then
             '    Car(i).flag = False
             'End If
             If Not Car(i).get_Err = Car(i).Pre_Error_Code Then
+                Dim Pre_Error_Code = Car(i).Pre_Error_Code
                 Car(i).Pre_Error_Code = Car(i).get_Err
                 If Car(i).get_Err > 0 Then
-
-
                     Try
                         Query = "INSERT ignore INTO  `alarm` (`cmd_idx`, `HAPPEN_DATE`, `CLEAR_DATE`, `ALM_ID`, `ALM_DEVICE`, `ALM_TYPE`, `ALM_MSG`, `SUB_LOC`, `ALARM_SPACE`, `CST_ID`) "
                         Query += "VALUES ('" + Car(i).cmd_sql_idx.ToString + "', now() ,'', '" + Car(i).get_Err.ToString + "', '" + Car(i).device_no.ToString + "', '', '', '" + Car(i).get_tagId.ToString + "', '', '" + Car(i).Shelf_Car_No.ToString + "') ;"
                         sqlCommand.CommandText = Query
                         sqlCommand.ExecuteNonQuery()
+                        Load_Error()
                         settext(Query)
+                        Dim idx As Integer = alarm.Query_idx(Car(i).get_Err)
+                        'comQGWrapper.EventReportSendOb(GEM.EVENT_UnitAlarmSet, comQGWrapper.Eqpname + "C" + Car(i).device_no.ToString + "," + alarm.ALM_ID(idx).ToString + "," + alarm.ALM_ENG_TXT(idx))
                     Catch ex As Exception
                         settext(Query + ex.Message)
                     End Try
@@ -662,7 +1192,10 @@ Public Class Form1
                         Query = "update  `alarm` set  `CLEAR_DATE`=now() where  ALM_DEVICE='" + Car(i).device_no.ToString + "' and CLEAR_DATE < '2019-01-01' "
                         sqlCommand.CommandText = Query
                         sqlCommand.ExecuteNonQuery()
+                        Load_Error()
                         settext(Query)
+                        Dim idx As Integer = alarm.Query_idx(Pre_Error_Code)
+                        '  comQGWrapper.EventReportSendOb(GEM.EVENT_UnitAlarmCleared, comQGWrapper.Eqpname + "C" + Car(i).device_no.ToString + "," + alarm.ALM_ID(idx).ToString + "," + alarm.ALM_ENG_TXT(idx))
                     Catch ex As Exception
                         settext(Query + ex.Message)
                     End Try
@@ -673,7 +1206,7 @@ Public Class Form1
 
 
         If Car(view_car_idx).get_Err > 0 Then
-            Me.Err_lb.Text = Car(view_car_idx).get_Err.ToString + vbCrLf + alarm.Query_ALM_TXT(Car(view_car_idx).get_Err, Car(view_car_idx).Car_type)
+            Me.Err_lb.Text = Car(view_car_idx).get_Err.ToString + vbCrLf + alarm.Query_ALM_TXT(Car(view_car_idx).get_Err)
         Else
             Me.Err_lb.Text = ""
         End If
@@ -685,29 +1218,25 @@ Public Class Form1
     End Sub
 
     Private Sub Form1_FormClosing(ByVal sender As Object, ByVal e As System.Windows.Forms.FormClosingEventArgs) Handles Me.FormClosing
-        If MessageBox.Show("Á¢∫ÂÆöÈóúÈñâË¶ñÁ™ó?", "Ë≠¶Âëä", MessageBoxButtons.YesNo) = MsgBoxResult.No Then
-
+        If MessageBox.Show("ΩT©w√ˆ≥¨IMBS?", "ƒµßi", MessageBoxButtons.YesNo) = MsgBoxResult.No Then
             e.Cancel = True
-
         End If
     End Sub
 
 
 
-  
+
 
     Private Sub Form1_Load(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles MyBase.Load
-        'Dim cf1 As Configuration = ConfigurationManager.OpenExeConfiguration(ConfigurationUserLevel.None)
-
-       
+        'Dim cf1 As Configuration = ConfigurationManager.OpenExeConfiguration(ConfigurationUserLevel.None
+        'ReDim eqptest.DI(15)
+        ' comQGWrapper = New GEM
         Dim xdoc As XmlDocument = New XmlDocument
         Dim a As StreamReader = New StreamReader("setting.ini")
         Dim str As String = a.ReadToEnd
-        'Âà§Êñ∑Ë≥áÊñôÂ§æÊúâÁÑ°Â≠òÂú®
-        If Not Directory.Exists("log") Then
-            Directory.CreateDirectory("log")
-        End If
+
         a.Close()
+
         Try
             xdoc.LoadXml(str)
 
@@ -716,7 +1245,7 @@ Public Class Form1
             Me.ALL_Loading_check.Checked = CBool(xdoc.GetElementsByTagName("ALL_Loading_check").Item(0).InnerXml)
             Me.IR_check.Checked = CBool(xdoc.GetElementsByTagName("IR_sensor").Item(0).InnerXml)
 
-            Me.chrage_exception.Text = xdoc.GetElementsByTagName("chrage_exception").Item(0).InnerXml '‰∏çÂÖÖÈõªÊ∏ÖÂñÆ
+
             Me.MyDB_txt.Text = xdoc.GetElementsByTagName("MyDB").Item(0).InnerXml '
             Me.IP.Text = xdoc.GetElementsByTagName("IP").Item(0).InnerXml
             Me.LPort.Text = xdoc.GetElementsByTagName("LPort").Item(0).InnerXml
@@ -728,27 +1257,65 @@ Public Class Form1
             password = password_txt.Text
 
 
-            PathLenTxt.Text = xdoc.GetElementsByTagName("PathLen").Item(0).InnerXml
-            RemapLenTxt.Text = (xdoc.GetElementsByTagName("RemapLen").Item(0).InnerXml)
-            PathLen = CInt(PathLenTxt.Text)
-            ReMapLen = CInt(RemapLenTxt.Text)
+        
 
             DebugMode.Checked = CBool(xdoc.GetElementsByTagName("DebugMode").Item(0).InnerXml)
 
             DoorSetLenTxt.Text = CInt((xdoc.GetElementsByTagName("DoorSetLen").Item(0).InnerXml))
             DoorSetLen = CInt(DoorSetLenTxt.Text)
 
-            AgvTimeout.Text = CInt((xdoc.GetElementsByTagName("AgvTimeout").Item(0).InnerXml))
+            AgvTimeout.Text = CInt((xdoc.GetElementsByTagName("AgvTimeout").Item(0).InnerXml)).ToString
             AgvTimeoutVal = CInt(AgvTimeout.Text)
-            RetreatPathTxt.Text = (xdoc.GetElementsByTagName("RetreatPath").Item(0).InnerXml)
-            RetreatPath = CInt(RetreatPathTxt.Text)
+            ratio.Text = xdoc.GetElementsByTagName("Ratio").Item(0).InnerXml
+            AGVratio = CDbl(xdoc.GetElementsByTagName("Ratio").Item(0).InnerXml)
 
+            McsPort = CInt(xdoc.GetElementsByTagName("McsPort").Item(0).InnerXml)
+            McsPortTxt.Text = xdoc.GetElementsByTagName("McsPort").Item(0).InnerXml
+
+
+            SOC = CInt(xdoc.GetElementsByTagName("SOC").Item(0).InnerXml)
+            SOCTxt.Text = xdoc.GetElementsByTagName("SOC").Item(0).InnerXml
+
+            Try
+                map_offset_X = CInt(xdoc.GetElementsByTagName("MapX").Item(0).InnerXml)
+                MapX.Text = xdoc.GetElementsByTagName("MapX").Item(0).InnerXml
+                map_offset_Y = CInt(xdoc.GetElementsByTagName("MapY").Item(0).InnerXml)
+                MapY.Text = xdoc.GetElementsByTagName("MapY").Item(0).InnerXml
+            Catch ex As Exception
+                map_offset_X = 0
+                map_offset_Y = 0
+            End Try
+
+            For k As Integer = 200 To 249
+
+                If xdoc.GetElementsByTagName("Err" + k.ToString).Count = 1 Then
+                  
+                        Dim chb As CheckBox = Me.Controls.Find("Err" + k.ToString(), True)(0)
+                        chb.Checked = CBool(xdoc.GetElementsByTagName("Err" + k.ToString).Item(0).InnerXml)
+                    If CBool(xdoc.GetElementsByTagName("Err" + k.ToString).Item(0).InnerXml) = False Then
+                        AutoReset(k - 200) = 0
+
+
+                    Else
+
+                        AutoReset(k - 200) = k
+                    End If
+                Else
+                    AutoReset(k - 200) = k
+                End If
+
+
+            Next
+            BlockPoint.Text = xdoc.GetElementsByTagName("BlockPoint").Item(0).InnerXml
+            AllBlockPoint = xdoc.GetElementsByTagName("BlockPoint").Item(0).InnerXml
+            AllBlockPointList = AllBlockPoint.Split(",")
         Catch ex As Exception
-            MsgBox("ËÆÄÂèñË®≠ÂÆöÊúâÁï∞Â∏∏ÔºåË´ãÈáçÊñ∞Â≠òÊ™î‰∏¶ÈáçÂïü")
+            MsgBox("≈™®˙≥]©w¶≥≤ß±`°AΩ–≠´∑s¶s¿…®√≠´±“" + ex.Message)
         End Try
         'MsgBox(My.Settings.MyDB)
         Mysql_str = "charset=utf8 ;Database=" + MyDB_txt.Text + "; Data Source=" + IP.Text + ";User id=" + user + ";Password=" + password + "; Allow Zero Datetime=True;"
         Load_Car_info()
+
 
 
         log = New StreamWriter(log_filename, True, Encoding.Default)
@@ -769,26 +1336,31 @@ Public Class Form1
         Dim oConn As MySqlConnection
         Dim sqlCommand As New MySqlCommand
         oConn = New MySqlConnection(Mysql_str)
-        Dim Query As String = "SELECT Tag_ID,X,Y,Retreat_Flag,Tag_name,floor,floor_no,th,slam FROM `point` where Tag_ID between 0 and 19999  order by Tag_ID ASC"
+        Dim Query As String = "SELECT A.Tag_ID, X, Y, Retreat_Flag, Tag_name, floor, floor_no, site, IF( B.`Tag_ID` IS NULL , IF( C.`Tag_ID` IS NULL , 0, 3 ) , 1 ) , "
+        Query += " IF( B.`Tag_ID` IS NULL , IF( C.`Tag_ID` IS NULL , '', C.ZONE_NAME ) , B.ZONE_NAME	 )  as ZONENAME, IF( B.`Tag_ID` IS NULL , IF( C.`Tag_ID` IS NULL , '', C.PORT_ID) , B.SHELF_LOC	 )  as LOC , IF( B.`Tag_ID` IS NULL , IF( C.`Tag_ID` IS NULL , '0', PORT_STN_NO ) , B.SHELF_STN_NO )   as stkval ,if (D.CARRIER_ID is null,'',D.CARRIER_ID ),th "
+        Query += " FROM `point` A LEFT JOIN shelf B ON A.`Tag_ID` = B.`Tag_ID` LEFT JOIN port C ON A.`Tag_ID` = C.`Tag_ID` LEFT JOIN `carrier` D on A.Tag_name=D.SUB_LOC  WHERE  a.Tag_ID   BETWEEN 0 AND 19999 "
         Dim mReader As MySqlDataReader
         oConn.Open()
         sqlCommand.Connection = oConn
         sqlCommand.CommandText = Query
         mReader = sqlCommand.ExecuteReader()
         i = 0
-        Tag_point_Dictionary.Clear()
         While (mReader.Read)
             Tag_ID_List(i) = CInt(mReader.Item(0))
             Tag_point_list(i).TagId = CInt(mReader.Item(0))
             Tag_point_list(i).X = CInt(mReader.Item(1))
             Tag_point_list(i).Y = CInt(mReader.Item(2))
-            Tag_point_list(i).th = CInt(mReader.Item(7))
             Tag_point_list(i).Retreat_Flag = CInt(mReader.Item(3))
             Tag_point_list(i).name = mReader.Item(4).ToString
             Tag_point_list(i).floor = mReader.Item(5).ToString
             Tag_point_list(i).floor_no = CInt(mReader.Item(6))
-            Tag_point_list(i).slam = CInt(mReader.Item(8))
-            Tag_point_Dictionary.Add(Tag_point_list(i).TagId, Tag_point_list(i))
+            Tag_point_list(i).site = mReader.Item(7)
+            Tag_point_list(i).tagtype = CInt(mReader.Item(8))
+            Tag_point_list(i).ZONE_NAME = mReader.Item(9)
+            Tag_point_list(i).LOC = mReader.Item(10)
+            Tag_point_list(i).stkval = CInt(mReader.Item(11))
+            Tag_point_list(i).CarrierID = (mReader.Item(12))
+            Tag_point_list(i).th = (mReader.Item(13))
             i += 1
             tagid_len = i
         End While
@@ -796,11 +1368,8 @@ Public Class Form1
         Query = "update  `alarm` set  `CLEAR_DATE`=now() where   CLEAR_DATE < '2019-01-01' "
         sqlCommand.CommandText = Query
         sqlCommand.ExecuteNonQuery()
+
         Array.Resize(Tag_point_list, tagid_len)
-
-
-   
-
         For j As Integer = 0 To tagid_len - 1
             Tag_ID_Fork_List(j) = Tag_ID_List(j)
             Tag_ID_Fork_List(j + tagid_len) = Tag_ID_List(j) + 10000
@@ -810,55 +1379,38 @@ Public Class Form1
 
         Load_Path_base()
         Load_Path_fork_base()
-
+        Load_Error()
 
         For k As Integer = 0 To Dijkstra_list.Length - 1
             If Dijkstra_list(k).CarType = "9" Then
                 'FORK
-                Load_Path_fork(Dijkstra_list(k).name, Tag_ID_Fork_List, Dijkstra_list(k).ary) 'ËºâÂÖ•Ë∑ØÂæëË≥áÊñô
+                Load_Path_fork(Dijkstra_list(k).name, Tag_ID_Fork_List, Dijkstra_list(k).ary) '∏¸§J∏ÙÆ|∏ÍÆ∆
             Else
-                Load_Path(Dijkstra_list(k).name, Tag_ID_List, Dijkstra_list(k).ary) 'ËºâÂÖ•Ë∑ØÂæëË≥áÊñô
+                Load_Path(Dijkstra_list(k).name, Tag_ID_List, Dijkstra_list(k).ary) '∏¸§J∏ÙÆ|∏ÍÆ∆
             End If
-
             car_type.Items.Add(Dijkstra_list(k).name)
         Next
 
-        ' Load_Shelf_Car() 'ËºâÂÖ•Ë∑ØÂæëË≥áÊñô
+        ' Load_Shelf_Car() '∏¸§J∏ÙÆ|∏ÍÆ∆
 
         MainBG_timer.Start()
-        For i = 0 To Tag_point_list.Length - 1
-            Me.From_cb.Items.Add(Tag_point_list(i).TagId)
-            Me.To_cb.Items.Add(Tag_point_list(i).TagId)
-        Next
-        ' cmd È°ØÁ§∫ÂëΩ‰ª§
+
+
+        'For i = 0 To Tag_point_list.Length - 1
+        '    Me.From_cb.Items.Add(Tag_point_list(i).TagId)
+        '    Me.To_cb.Items.Add(Tag_point_list(i).TagId)
+        'Next
+        ' cmd ≈„•‹©R•O
         ListView1_ReNew()
         ListView1.ContextMenuStrip = ContextMenuStrip1
+        ListView2.ContextMenuStrip = ContextMenuStrip3
         'Me.Car1.ContextMenuStrip = ContextMenuStrip2
         Me.cmd_timer.Start()
 
-        alarm.init()
-        Query = " SELECT ErrorCode,Description,CarType FROM `error_code`"
-        sqlCommand.CommandText = Query
-        mReader = sqlCommand.ExecuteReader()
-        alarm.ALM_ID(0) = 0
-        alarm.ALM_TXT(0) = "Êú™Áü•Áï∞Â∏∏"
-        alarm.ALM_RPT_ID(0) = 3
-        alarm.ALM_ENG_TXT(0) = "unknow"
-        i = 1
-
-        While mReader.Read
-            alarm.ALM_ID(i) = CInt(mReader.Item(0))
-            alarm.ALM_TXT(i) = mReader.Item(1).ToString
-            alarm.CarType(i) = mReader.Item(2)
-            alarm.ALM_ENG_TXT(i) = mReader.Item(1).ToString
-            i += 1
-        End While
 
 
-        Array.Resize(alarm.ALM_ID, i)
-        Array.Resize(alarm.ALM_TXT, i)
-        Array.Resize(alarm.ALM_RPT_ID, i)
-        Array.Resize(alarm.ALM_ENG_TXT, i)
+
+
 
         oConn.Close()
         oConn.Dispose()
@@ -866,14 +1418,57 @@ Public Class Form1
             door_check_timer.Start()
             LFT_timer.Start()
             Load_Door_Data()
-            EQ_Timer.Start()
         End If
-        VerLog.Text += "3.128 ÈáçÊñ∞ËºâÂÖ•Âú∞Âúñ" + vbCrLf
-        VerLog.Text += "3.102 ‰øÆÊ≠£ÈôÄËû∫ÂÑÄÊ©üÂûã" + vbCrLf
-        VerLog.Text += "3.99 Êñ∞Â¢ûPOWER2ËªäÂûã" + vbCrLf
-        VerLog.Text += "3.96 ‰øÆÊ≠£LOWCARÁöÑAGVCÈáçÂïüÂïèÈ°å" + vbCrLf
- 
+
+        VerLog.Text += "3.68 ∞h¡◊ßÔ¶®≥Ã™Ò10≠”¬I" + vbCrLf
+        VerLog.Text += "3.67 ≠◊•øπq±Ë≤ß±`°A¡◊ßK∑mπq±Ë°A≠◊ßÔLOG¨ˆø˝§Ë¶°" + vbCrLf
+        VerLog.Text += "3.66 ™˘§fÆ…°AAGVC≠´±“≤ß±`" + vbCrLf
+        VerLog.Text += "3.63 ≠◊•ø¨€æF¬I¶ÏµL™kæ…ØË" + vbCrLf
+        VerLog.Text += "3.62 •[§JAgvTimeoutæ˜®Ó" + vbCrLf
+        VerLog.Text += "3.61 •[§J≠´Ω∆∏ÙÆ|ßP¬_" + vbCrLf
+        VerLog.Text += "3.60 ≠◊•ø≠´±“AGVCµL™k≤M∞£≤ß±`™∫∞›√D" + vbCrLf
+        VerLog.Text += "3.59 ≠◊•ø∞h¡◊≈ﬁøË D∫t∫‚™k¶≥∞›√D°A¥˙∏’∏ÙÆ|™∫BUG≠◊•ø" + vbCrLf
+
+
         ' Door_List(0).connect()
+
+        Dim path As String
+
+
+
+
+      
+        path = System.Environment.CurrentDirectory '& "\.."
+        comQSWrapper.Initialize()
+        comQSWrapper.Start(McsPort)
+
+        comQGWrapper.Initialize(path)
+
+        Load_mcs_info()
+
+        MCS.Start()
+        Me.From_cb.Items.Add(0)
+        Me.From_cb.Items.Add(1)
+        Me.From_cb.Items.Add(2)
+        Me.From_cb.Items.Add(3)
+        For i = 0 To Tag_point_list.Length - 1
+            Dim idx As Integer = 0
+
+            If Not Tag_point_list(i).LOC = "" Then
+                idx = comQGWrapper.CST_SearchByLoc(Tag_point_list(i).LOC)
+                If idx > -1 Then
+                    Me.From_cb.Items.Add(Tag_point_list(i).TagId)
+                Else
+                    Me.To_cb.Items.Add(Tag_point_list(i).TagId)
+                End If
+            End If
+
+
+
+        Next
+        agv_info.BackColor = Color.FromArgb(0, 147, 166)
+        Update_SQL("update port set EQ_State ='OFFLINE' where 1")
+        ' PictureBox1.BackColor = Color.FromArgb(92, 175, 149)
     End Sub
     Sub Load_Car_info()
         Dim oConn As MySqlConnection
@@ -886,69 +1481,92 @@ Public Class Form1
         oConn = New MySqlConnection(Mysql_str)
         oConn.Open()
         sqlCommand.Connection = oConn
-        ' Query = "SELECT AGVNo,Position,Loading,owner,Car_type,Chrage_Point,block_point,wait_point,Chrage_volt,SafeSensor,Compass FROM `agv_list` where flag=1 order by AGVNo"
-        Query = "SELECT AGVNo,Position,Loading,owner,Car_type,Chrage_Point,block_point,wait_point,Chrage_volt,SafeSensor,Compass,AutoCharge,AutoChargeVal,car_site,Recharge_SOC,Recharge_Point,lock_user,slam FROM `agv_list` where flag=1 order by AGVNo"
+        Query = "SELECT AGVNo,Position,Loading,owner,Car_type,Recharge_Point,block_point,wait_point,Recharge_volt,SafeSensor,car_site,width,height,offset_x,offset_y,Recharge_soc,ReverseXY,MaxPath,RePath,RetreatPath,block_path,lock_user FROM `agv_list` where flag=1 order by AGVNo"
         sqlCommand.CommandText = Query
         mReader = sqlCommand.ExecuteReader()
         i = 0
-        For i = 0 To car_no
-            Dim pic As PictureBox = Me.Controls.Find("Car" + i.ToString(), True)(0)
-            pic.ContextMenuStrip = ContextMenuStrip2
-            Car(i) = New Car_point(300 + 25 * i, 430, pic)
-            Car(i).status = 0
+        For i = 0 To car_no - 1
+            ' Dim pic As PictureBox = Me.Controls.Find("Car" + i.ToString(), True)(0)
+            'pic.ContextMenuStrip = ContextMenuStrip2
+            Car(i) = New Car_point(300 + 25 * i, 430)
+            Car(i).status = -2
             If (mReader.Read) Then
-                Try
-                    ' MsgBox(mReader.Item(0).ToString)
-                    Car(i).device_no = CInt(mReader.Item(0))
-                    Car(i).set_tagId(CInt(mReader.Item(1))) 'ÂàùÂßãÂÄº
-                    Car(i).set_loading(CInt(mReader.Item(2))) 'ÂàùÂßãÂÄº
+                ' MsgBox(mReader.Item(0).ToString)
+                Car(i).flag = True
+                Car(i).device_no = CInt(mReader.Item(0))
+                Car(i).set_tagId(CInt(mReader.Item(1))) '™Ï©l≠»
+                Car(i).set_loading(CInt(mReader.Item(2))) '™Ï©l≠»
 
-                    Car(i).Car_type = mReader.Item(4).ToString
-                    Car(i).Chrage_Point = CInt(mReader.Item(5))
-                    Car(i).wait_point = CInt(mReader.Item(7))
-                    Car(i).Chrage_volt = CInt(mReader.Item(8))
-                    ' MsgBox(Car(i).device_no)
-                    txtCar.Items.Add(Car(i).device_no)
-                    txtCar.Text = txtCar.Items(0).ToString
-                    Car(i).Block_Point = mReader.Item(6).ToString
-                    Car(i).SafeSensor = CInt(mReader.Item(9))
-                    Car(i).Compass = CInt(mReader.Item(10))
-                    Car(i).AutoCharge = CInt(mReader.Item(11))
-                    Car(i).AutoChargeVal = CInt(mReader.Item(12))
-                    Car(i).Site = (mReader.Item(13)).ToString
-                    Car(i).Recharge_SOC = CInt(mReader.Item(14))
-                    Car(i).Recharge_Point = (mReader.Item(15)).ToString
-                    Car(i).Lock_user = (mReader.Item(16)).ToString
-                    Car(i).slam = CInt(mReader.Item(17))
-                Catch ex As Exception
-                    MsgBox(Car(i).device_no.ToString + "Ë®≠ÂÆöÈåØË™§")
-                End Try
+                Car(i).Car_type = mReader.Item(4).ToString
+                Car(i).Recharge_Point_list = mReader.Item(5).ToString
+                Car(i).wait_point = CInt(mReader.Item(7))
+                Car(i).Recharge_volt = CInt(mReader.Item(8))
+                ' MsgBox(Car(i).device_no)
+                txtCar.Items.Add(Car(i).device_no)
+                AGV_SetNo.Items.Add(Car(i).device_no)
+                txtCar.Text = txtCar.Items(0).ToString
+                Car(i).Block_Point = mReader.Item(6).ToString
+                Car(i).SafeSensor = CInt(mReader.Item(9))
+                Car(i).Site = mReader.Item(10).ToString
+                Car(i).width = CInt(mReader.Item(11))
+                Car(i).height = CInt(mReader.Item(12))
+                Car(i).offset_X = CInt(mReader.Item(13))
+                Car(i).offset_Y = CInt(mReader.Item(14))
+                Car(i).Recharge_SOC = CInt(mReader.Item(15))
+                Car(i).ReverseXY = CInt(mReader.Item(16))
+                Car(i).MaxPath = CInt(mReader.Item(17))
+                Car(i).RePath = CInt(mReader.Item(18))
+                Car(i).RetreatPath = CInt(mReader.Item(19))
+                Car(i).Block_Path = mReader.Item(20)
+                Car(i).Lock_user = mReader.Item(21)
 
+
+                'Car(i).force_tagId(CInt(mReader.Item(1)))
             Else
-                Car(i).device_no = 0
-                Car(i) = New Car_point(0, 430, pic)
-                pic.Hide()
+
+                car_no = i
+
+                Exit For
+
+                'pic.Hide()
 
             End If
         Next
 
         mReader.Close()
+        Array.Resize(Car, car_no)
+        For i = 0 To car_no - 1
+            Query = "  SELECT  `Status`,date_format(updatetime,'%Y-%m-%d %H:%i:%s')  FROM  `agv_status_history` WHERE  `AGVNo` =" + Car(i).device_no.ToString + " ORDER BY  `agv_status_history`.`updatetime` DESC limit 0,1 "
+            sqlCommand.CommandText = Query
+            mReader = sqlCommand.ExecuteReader
+            If mReader.Read Then
+                Car(i).agv_status = mReader.Item(0)
+                Car(i).Pre_agv_status = mReader.Item(0)
+                Car(i).agv_status_time = mReader.Item(1).ToString
+            Else
+                Car(i).agv_status = "OffLine"
+                Car(i).Pre_agv_status = "OffLine"
+                Car(i).agv_status_time = Now().ToString("yyyy-MM-dd HH:mm:ss")
+            End If
 
-        Query = " select A.IPAdr,A.IPPort,A.StartDI,A.Adr,B.tag_id,B.X+A.AXIS_X ,B.Y+AXIS_Y,PORT_ID  FROM `charger` A left join point B  on A.Tag_ID=B.Tag_ID  WHERE 1 group by IPAdr,IPPort,StartDI"
+
+            mReader.Close()
+        Next
+        Query = "SELECT  `Label_txt`, `X`, `Y` from `label` where 1"
         sqlCommand.CommandText = Query
         mReader = sqlCommand.ExecuteReader()
         i = 0
-        While mReader.Read
-            ChargerClient(i).init(mReader.Item(0).ToString, CInt(mReader.Item(1)), CInt(mReader.Item(2)))
-            ChargerClient(i).HoldingReg = CInt(mReader.Item(3))
-            ChargerClient(i).tag_id = CInt(mReader.Item(4))
-            ChargerClient(i).AXIS_X = CInt(mReader.Item(5))
-            ChargerClient(i).AXIS_Y = CInt(mReader.Item(6))
-            ChargerClient(i).EQ_ID = mReader.Item(7).ToString
+        While (mReader.Read)
+            lablelist(i).Txt = mReader.Item(0).ToString
+            lablelist(i).X = CInt(mReader.Item(1))
+            lablelist(i).Y = CInt(mReader.Item(2))
+
+            lablelist(i).isize = 40
             i += 1
         End While
-        Array.Resize(ChargerClient, i)
         mReader.Close()
+        Array.Resize(lablelist, i)
+
         oConn.Close()
         oConn.Dispose()
 
@@ -981,14 +1599,8 @@ Public Class Form1
                 Door_List(i).Door_Pic = Me.Controls.Find("Door_" + i.ToString(), True)(0)
                 Door_List(i).Door_Pic.Text = Door_List(i).EQ_ID
 
-                Try
-                    Door_List(i).Door_Pic.Left = CInt(mReader.Item(7)) - offset_x
-                    Door_List(i).Door_Pic.Top = CInt(mReader.Item(8)) - offset_y
-                Catch ex As Exception
-                    Door_List(i).Door_Pic.Left = offset_x
-                    Door_List(i).Door_Pic.Top = offset_y
-                End Try
-
+                Door_List(i).Door_Pic.Left = CInt(mReader.Item(7)) - offset_x
+                Door_List(i).Door_Pic.Top = CInt(mReader.Item(8)) - offset_y
                 If Door_List(i).connect() Then
                     settext(i.ToString + "->" + Door_List(i).EQ_ID + ":door OK")
                     ' MsgBox(Door_List(i).Door_Pic.Text + "OK")
@@ -997,7 +1609,7 @@ Public Class Form1
                     ' MsgBox(Door_List(i).Door_Pic.Text + "NG")
                 End If
             Else
-                'ÁÑ°Ë≥áÊñôË®≠ÁÇ∫false
+                'µL∏ÍÆ∆≥]¨∞false
 
                 Door_List(i) = New Door_point(False)
 
@@ -1011,7 +1623,7 @@ Public Class Form1
 
         Query = "SELECT A.EQ_ID,A.Door_type,A.Tagid,A.StartDO,A.StartDI,A.IP,A.port,B.X,B.Y FROM `LFT` A left join  `point` B on A.Tagid=B.Tag_ID where A.flag=1"
         sqlCommand.CommandText = Query
-       
+
         mReader = sqlCommand.ExecuteReader()
         i = 0
         For i = 0 To LFT_List.Length - 1
@@ -1036,7 +1648,7 @@ Public Class Form1
                     ' MsgBox(Door_List(i).Door_Pic.Text + "NG")
                 End If
             Else
-                'ÁÑ°Ë≥áÊñôË®≠ÁÇ∫false
+                'µL∏ÍÆ∆≥]¨∞false
                 LFT_List(i).init(False)
                 LFT_List(i).LFT_Pic = Me.Controls.Find("LFT" + i.ToString(), True)(0)
                 LFT_List(i).LFT_Pic.Left = 10
@@ -1050,289 +1662,490 @@ Public Class Form1
         mReader.Close()
         oConn.Close()
     End Sub
-    Dim cmd_timer_IsBusy As Boolean = False
+    Sub Load_mcs_info()
+        Dim oConn As MySqlConnection
+        Dim sqlCommand As New MySqlCommand
+        Dim Query As String = ""
+        Dim mReader As MySqlDataReader
+        ' Dim path_i As Integer = 0
+        Dim i As Integer
 
+
+        oConn = New MySqlConnection(Mysql_str)
+        oConn.Open()
+        sqlCommand.Connection = oConn
+
+        alarm.init()
+        Query = " SELECT ErrorCode,Description,ALM_RPT_ID,ALM_TXT FROM `error_code`"
+        sqlCommand.CommandText = Query
+        mReader = sqlCommand.ExecuteReader()
+        alarm.ALM_ID(0) = 0
+        alarm.ALM_TXT(0) = "•º™æ≤ß±`"
+        alarm.ALM_RPT_ID(0) = 3
+        alarm.ALM_ENG_TXT(0) = "UNKNOWN"
+        i = 1
+        While mReader.Read
+            alarm.ALM_ID(i) = CInt(mReader.Item(0))
+            alarm.ALM_TXT(i) = mReader.Item(1).ToString
+            alarm.ALM_RPT_ID(i) = CInt(mReader.Item(2))
+            alarm.ALM_ENG_TXT(i) = mReader.Item(3).ToString
+            i += 1
+        End While
+        Array.Resize(alarm.ALM_ID, i)
+        Array.Resize(alarm.ALM_TXT, i)
+        Array.Resize(alarm.ALM_RPT_ID, i)
+        Array.Resize(alarm.ALM_ENG_TXT, i)
+
+
+        mReader.Close()
+
+  
+
+        Query = " SELECT `ZONE_NAME` , COUNT( * ) FROM `shelf` WHERE 1 GROUP BY `ZONE_NAME`"
+        sqlCommand.CommandText = Query
+        mReader = sqlCommand.ExecuteReader()
+        i = 0
+        While mReader.Read
+            comQGWrapper.Zone(i).ZoneName = mReader.Item(0).ToString
+            comQGWrapper.Zone(i).ZoneSize = CInt(mReader.Item(1).ToString)
+            comQGWrapper.Zone(i).DisabledLocations = ""
+            ToLocList.Items.Add(comQGWrapper.Zone(i).ZoneName)
+            i += 1
+        End While
+        Array.Resize(comQGWrapper.Zone, i)
+        mReader.Close()
+        Query = "SELECT `STK_NAME`, `CARRIER_ID`, `LOT_ID`, `CARRIER_TYPE`, `LOC_NAME`, `LOC_TYPE`,  `SUB_LOC`, `CARRIER_STATUS`, `RROCESS_ID`,"
+        Query += " `STORED_TIME`, `REQ_TIME`, `UPDATE_DATE`, `UPDATE_BY`, `CREATE_DATE`, `CREATE_BY`, `BLOCK_FLAG`, `INV_FLAG` FROM `carrier` where not LOC_NAME='' "
+        sqlCommand.CommandText = Query
+        mReader = sqlCommand.ExecuteReader()
+        i = 0
+        While mReader.Read
+            If CInt(mReader.Item(5)) = 1 Then
+                'shelf   
+                comQGWrapper.CST_Add(mReader.Item(1).ToString, mReader.Item(4).ToString, mReader.Item(6).ToString, mReader.Item(7))
+            ElseIf CInt(mReader.Item(5)) = 3 Then
+                'EQ
+                comQGWrapper.CST_Add(mReader.Item(1).ToString, mReader.Item(4).ToString, mReader.Item(4).ToString, mReader.Item(7))
+            End If
+            CSTList.Items.Add(mReader.Item(1).ToString)
+
+            i += 1
+        End While
+
+        mReader.Close()
+        Query = " SELECT A.Tag_ID,STK_NAME,SHELF_LOC,CarrierID,A.AXIS_X+B.`X`,AXIS_Y+B.`Y`,ZONE_NAME,SHELF_STATUS,UPDATE_REASON,SHELF_STN_NO FROM `shelf` A left join point B on A.Tag_ID=B.Tag_ID WHERE not B.Tag_ID is null "
+        sqlCommand.CommandText = Query
+        mReader = sqlCommand.ExecuteReader()
+        i = 0
+        While mReader.Read
+            Dim idx As Integer = -1
+            comQGWrapper.ShelfData(i).tag_id = mReader.Item(0).ToString
+            comQGWrapper.ShelfData(i).STK_Name = mReader.Item(1).ToString
+            comQGWrapper.ShelfData(i).Shelf_Loc = mReader.Item(2).ToString
+
+            idx = comQGWrapper.CST_SearchByLoc(comQGWrapper.ShelfData(i).Shelf_Loc)
+            If idx > -1 Then
+                comQGWrapper.ShelfData(i).CarrierID = comQGWrapper.CST(idx).CarrierID
+            End If
+
+
+            comQGWrapper.ShelfData(i).AXIS_X = CInt(mReader.Item(4))
+            comQGWrapper.ShelfData(i).AXIS_Y = CInt(mReader.Item(5))
+            comQGWrapper.ShelfData(i).Zone_Name = mReader.Item(6).ToString
+            comQGWrapper.ShelfData(i).Shelf_Status = mReader.Item(7).ToString
+            comQGWrapper.ShelfData(i).UPDATE_REASON = mReader.Item(8).ToString
+            comQGWrapper.ShelfData(i).SHELF_STN_NO = mReader.Item(9).ToString
+
+            ' ToLocList.Items.Add(comQGWrapper.ShelfData(i).Shelf_Loc)
+            i += 1
+        End While
+        mReader.Close()
+        Array.Resize(comQGWrapper.ShelfData, i)
+    
+        For j As Integer = 0 To comQGWrapper.Zone.Length - 1
+            comQGWrapper.Zone(j).ZoneCapacity = comQGWrapper.Zone(j).ZoneSize - comQGWrapper.Zone(j).CST_count
+            comQGWrapper.Zone(j).pre_ZoneCapacity = comQGWrapper.Zone(j).ZoneCapacity
+        Next
+        Query = " select A.`Tag_ID`, `STK_NAME`, `PORT_ID`, `ZONE_NAME`, `LOC_TYPE`, `PORT_TYPE`, `PORT_ORDER`, `TRANSFER_MODE`, `PORT_STATE`,"
+        Query += " `STATE_DESC`, `PORT_PRIORITY`, `PORT_STN_NO`, `EQ_NAME`, A.`AXIS_X`+B.`X`, `AXIS_Y`+B.`Y`, `AXIS_Z`, `UPDATE_TIME`, `UPDATE_USER`,IPAdr,IPPort,StartDI,Adr  FROM `port` A left join point B on A.Tag_ID=B.Tag_ID  WHERE not  B.Tag_ID is null "
+
+        sqlCommand.CommandText = Query
+        mReader = sqlCommand.ExecuteReader()
+        i = 0
+        While mReader.Read
+            comQGWrapper.EqPort(i).tag_id = CInt(mReader.Item(0))
+            comQGWrapper.EqPort(i).PortID = mReader.Item(2).ToString
+            comQGWrapper.EqPort(i).PortTransferState = 0
+            comQGWrapper.EqPort(i).LoadAvail = 1
+            comQGWrapper.EqPort(i).UnLoadAvail = 1
+            comQGWrapper.EqPort(i).ip = mReader.Item(18).ToString
+            comQGWrapper.EqPort(i).port = CInt(mReader.Item(19))
+            comQGWrapper.EqPort(i).AXIS_X = CInt(mReader.Item(13))
+            comQGWrapper.EqPort(i).AXIS_Y = CInt(mReader.Item(14))
+            comQGWrapper.EqPort(i).adr = CInt(mReader.Item(21))
+            ToLocList.Items.Add(comQGWrapper.EqPort(i).PortID)
+            i += 1
+
+        End While
+        Array.Resize(comQGWrapper.EqPort, i)
+
+        mReader.Close()
+
+
+
+        Query = " select IPAdr,IPPort,StartDI  FROM `port` WHERE 1 group by IPAdr,IPPort,StartDI"
+
+        sqlCommand.CommandText = Query
+        mReader = sqlCommand.ExecuteReader()
+        i = 0
+        While mReader.Read
+            eqp_client(i).init(mReader.Item(0).ToString, CInt(mReader.Item(1)), CInt(mReader.Item(2)))
+
+            i += 1
+        End While
+        Array.Resize(eqp_client, i)
+        mReader.Close()
+
+        Query = " select A.IPAdr,A.IPPort,A.StartDI,A.Adr,B.tag_id,B.X+A.AXIS_X ,B.Y+AXIS_Y,PORT_ID  FROM `charger` A left join point B  on A.Tag_ID=B.Tag_ID  WHERE 1 group by IPAdr,IPPort,StartDI"
+
+        sqlCommand.CommandText = Query
+        mReader = sqlCommand.ExecuteReader()
+        i = 0
+        While mReader.Read
+            ChargerClient(i).init(mReader.Item(0).ToString, CInt(mReader.Item(1)), CInt(mReader.Item(2)))
+            ChargerClient(i).HoldingReg = CInt(mReader.Item(3))
+            ChargerClient(i).tag_id = CInt(mReader.Item(4))
+            ChargerClient(i).AXIS_X = CInt(mReader.Item(5))
+            ChargerClient(i).AXIS_Y = CInt(mReader.Item(6))
+            ChargerClient(i).EQ_ID = mReader.Item(7).ToString
+            i += 1
+        End While
+        Array.Resize(ChargerClient, i)
+
+        mReader.Close()
+        Query = "SELECT COMMANDID,CARRIERID,SOURCE,DEST,PROCESSID,date_format(`REQUEST_TIME`,'%Y%m%d%H%i%s') FROM `mcs_cmd_list` "
+
+
+        sqlCommand.CommandText = Query
+        mReader = sqlCommand.ExecuteReader()
+        While mReader.Read
+            Dim cstid As String = mReader.Item(1).ToString
+            For j As Integer = 0 To comQGWrapper.CST.Length - 1
+                If comQGWrapper.CST(j).CarrierID = cstid Then
+                    comQGWrapper.CST(j).CommandID = mReader.Item(0).ToString
+                    comQGWrapper.CST(j).DEST = mReader.Item(3).ToString
+                    comQGWrapper.CST(j).PROCESSID = mReader.Item(4).ToString
+                    comQGWrapper.CST(j).TransferState = 1
+                    comQGWrapper.CST(j).PRIORITY = 50
+                    comQGWrapper.CST(j).mcstime = CLng(mReader.Item(5).ToString)
+
+                    Exit For
+                End If
+            Next
+        End While
+
+
+
+        mReader.Close()
+
+        oConn.Close()
+        oConn.Dispose()
+
+    End Sub
+    Sub Load_Error()
+        Dim oConn As MySqlConnection
+        Dim sqlCommand As New MySqlCommand
+        Dim Query As String = ""
+        Dim mReader As MySqlDataReader
+
+        oConn = New MySqlConnection(Mysql_str)
+    
+        Try
+            oConn.Open()
+            sqlCommand.Connection = oConn
+            Query = "SELECT `cmd_idx`,`ALM_DEVICE`,`HAPPEN_DATE`,`CLEAR_DATE`,`ALM_ID`,B.`Description`,`SUB_LOC`,`CST_ID`,C.CmdFrom,C.CmdTo FROM " + _
+            " `alarm` A left join error_code B on A.`ALM_ID`=B.ErrorCode left join `agv_cmd_history` C on A.cmd_idx=C.CmdKey WHERE 1 ORDER BY `A`.`HAPPEN_DATE` DESC limit 0,30 "
+
+            sqlCommand.CommandText = Query
+            mReader = sqlCommand.ExecuteReader()
+            alarm_list.Items.Clear()
+            While mReader.Read
+                Dim item As New ListViewItem()
+                item.Text = mReader.Item(0)
+                For i As Integer = 1 To 9
+                    item.SubItems.Add(mReader.Item(i).ToString)
+                Next
+                alarm_list.Items.Add(item)
+            End While
+            mReader.Close()
+
+        Catch ex As Exception
+            settext("Load_Error")
+        End Try
+
+
+        Try
+            oConn.Close()
+            oConn.Dispose()
+        Catch ex As Exception
+
+        End Try
+
+
+    End Sub
+    Dim cmd_timer_isbusy As Boolean = False
     Private Sub cmd_timer_Tick(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles cmd_timer.Tick
-        'Êõ¥Êñ∞Ë≥áÊñôÂ∫´()
+        'ßÛ∑s∏ÍÆ∆Æw()
+        If cmd_timer_isbusy = False Then
+            cmd_timer_isbusy = True
+    
         Dim i As Integer = 0
         Dim Query As String = ""
+        'Dim timestart As Long = Now.Ticks
         Dim temptagid(Tag_ID_List.Length - 1) As Integer
         For i = 0 To Tag_ID_List.Length - 1
             temptagid(i) = Tag_ID_List(i)
         Next
         Me.car_info.Text = "select_idx:" + Me.view_car_idx.ToString
         Me.car_info.Text += " " + Car(view_car_idx).get_info
-        Dim car_idx As Integer = 0
-        If cmd_timer_IsBusy = False Then
-            settext("cmdT")
-            cmd_timer_IsBusy = True
-
-            WorkList.Text = Car(view_car_idx).subcmd
-            Dim oConn As MySqlConnection
-            Dim sqlCommand As New MySqlCommand
 
 
-            oConn = New MySqlConnection(Mysql_str)
-            oConn.Open()
-            sqlCommand.Connection = oConn
+        WorkList.Text = Car(view_car_idx).subcmd
 
-            For i = 0 To car_no
-                'If Car(i).flag Then
+        Dim oConn As MySqlConnection
+        Dim sqlCommand As New MySqlCommand
 
-                If Car(i).cmd_idx = -2 And Not Car(i).get_status = 4 Then
-                    Car(i).subcmd = Car(i).get_tagId.ToString
-                ElseIf Car(i).subcmd = "" Then
-                    Car(i).subcmd = Car(i).get_tagId.ToString
-                Else
-                    If Car(i).subcmd.IndexOf(Car(i).get_tagId.ToString + ",") > -1 Then
-                        Car(i).subcmd = Car(i).subcmd.Remove(0, Car(i).subcmd.IndexOf(Car(i).get_tagId.ToString + ","))
-                    End If
 
+        oConn = New MySqlConnection(Mysql_str)
+        oConn.Open()
+        sqlCommand.Connection = oConn
+            Car(1).BMS1(16) += testval
+        For i = 0 To car_no - 1
+            'If Car(i).flag Then
+
+            If Car(i).cmd_idx = -2 And Not Car(i).get_status = 4 Then
+                Car(i).subcmd = Car(i).get_tagId.ToString
+            ElseIf Car(i).subcmd = "" Then
+                Car(i).subcmd = Car(i).get_tagId.ToString
+            Else
+                If Car(i).subcmd.IndexOf(Car(i).get_tagId.ToString + ",") > -1 Then
+                    Car(i).subcmd = Car(i).subcmd.Remove(0, Car(i).subcmd.IndexOf(Car(i).get_tagId.ToString + ","))
                 End If
 
-                If Car(i).get_auto = 1 Then
-                    Car(i).path_error_count = 0
-                    Car(i).Pre_TagID_time = Now()
-                    For j As Integer = 6 To 20
-                        Car(i).To_AGV(j) = 0
-                    Next
-                End If
-                If Car(i).flag = True Then
+            End If
 
-
-                    If Car(i).device_status(23) = 0 And Car(i).device_status(24) = 0 Then
-                        If Tag_point_Dictionary.ContainsKey(Car(i).get_tagId) Then
-                            Car(i).AXIS_X = Tag_point_Dictionary(Car(i).get_tagId).X
-                            Car(i).AXIS_Y = Tag_point_Dictionary(Car(i).get_tagId).Y
-                            Car(i).AXIS_Z = Tag_point_Dictionary(Car(i).get_tagId).th
-
-                        End If
-                    Else
-                        Dim offsetTh As Integer = 0
-                        If Car(i).device_status(25) > 65535 / 2 Then
-                            Car(i).AXIS_Z = (Car(i).device_status(25) - 65535) / 100
-                        Else
-                            Car(i).AXIS_Z = Car(i).device_status(25) / 100
-                        End If
-                        If (Car(i).ReverseXY = 0) Then
-                            If Car(i).offset_X >= 0 Then
-
-                                Car(i).AXIS_X = (Car(i).device_status(23) + Car(i).offset_X)
-                            Else
-
-                                Car(i).AXIS_X = -Car(i).offset_X - Car(i).device_status(23)
-                            End If
-                            If Car(i).offset_Y >= 0 Then
-
-                                Car(i).AXIS_Y = Car(i).device_status(24) + Car(i).offset_Y
-                            Else
-                                Car(i).AXIS_Y = -Car(i).device_status(24) - Car(i).offset_Y
-                            End If
-
-                            Car(i).AXIS_Z = Car(i).AXIS_Z * (-1)
-                        Else
-                            If Car(i).offset_X >= 0 Then
-                                Car(i).AXIS_X = (Car(i).device_status(24) + Car(i).offset_X)
-                            Else
-                                Car(i).AXIS_X = -Car(i).device_status(24) - Car(i).offset_X
-                            End If
-                            If Car(i).offset_Y >= 0 Then
-                                Car(i).AXIS_Y = Car(i).device_status(23) + Car(i).offset_Y
-                            Else
-                                Car(i).AXIS_Y = -Car(i).device_status(23) - Car(i).offset_Y
-                            End If
-                            offsetTh = -90
-                            Car(i).AXIS_Z += offsetTh
-                        End If
-                    End If
-                End If
-                If Car(i).get_auto = 0 And Car(i).get_status = 0 And Car(i).Lock_user = "" Then
-                    If Car(i).Recharge_Point = Car(i).get_tagId().ToString And (BmsWarmIdx And Car(i).BMS1(16)) Then
-                        Car(i).To_AGV(20) = 30000 + InttoBitidx(Car(i).BMS1(16))
-                    End If
-                    If Car(i).Recharge_Point = Car(i).get_tagId.ToString And (BmsWarmIdx And Car(i).BMS2(16)) Then
-                        Car(i).To_AGV(20) = 30100 + InttoBitidx(Car(i).BMS2(16))
-                    End If
-                End If
-                ' End If
-            Next
-            '---------------ÊéíÂ∫è
-            Dim temp0 As String = ""
-            Dim temp1 As String = ""
-            Dim car_idx_list(car_no, 1) As String
-            For car_idx = 0 To car_no
-                car_idx_list(car_idx, 0) = car_idx.ToString
-                If Car(car_idx).RequestTime = "" Then
-                    car_idx_list(car_idx, 1) = "9999-99-99 00:00:00"
-                Else
-                    car_idx_list(car_idx, 1) = Car(car_idx).RequestTime
-
-                End If
-            Next
-            For i = 0 To car_no - 1
-                For j As Integer = i + 1 To car_no
-                    If String.Compare(car_idx_list(i, 1), car_idx_list(j, 1)) > 0 Then
-                        temp0 = car_idx_list(i, 0)
-                        temp1 = car_idx_list(i, 1)
-                        car_idx_list(i, 0) = car_idx_list(j, 0)
-                        car_idx_list(i, 1) = car_idx_list(j, 1)
-                        car_idx_list(j, 0) = temp0
-                        car_idx_list(j, 1) = temp1
+            If Car(i).get_auto = 1 Then
+                Car(i).path_error_count = 0
+                Car(i).Pre_TagID_time = Now()
+                For j As Integer = 0 To 20
+                    Car(i).To_AGV(j) = 0
+                Next
+            End If
+             If Car(i).device_status(23) = 0 And Car(i).device_status(24) = 0 Then
+                For j As Integer = 0 To Tag_point_list.Length - 1
+                    If Car(i).get_tagId = Tag_point_list(j).TagId Then
+                        Car(i).AXIS_X = Tag_point_list(j).X
+                        Car(i).AXIS_Y = Tag_point_list(j).Y
+                        Car(i).AXIS_Z = Tag_point_list(j).th
                     End If
                 Next
+
+            Else
+
+                Dim offsetTh As Integer = 0
+                'ReverseXY 
+                'bit0(§œ¬‡XY)
+                'bit1 §œ¬‡X
+                'bit2 §œ¬‡Y
+                '
+                If (Car(i).ReverseXY = 0) Then
+                    If Car(i).offset_X >= 0 Then
+                        Car(i).AXIS_X = (Car(i).device_status(23) + Car(i).offset_X)
+                    Else
+
+                        Car(i).AXIS_X = -Car(i).offset_X - Car(i).device_status(23)
+
+                    End If
+                    If Car(i).offset_Y >= 0 Then
+
+                        Car(i).AXIS_Y = Car(i).device_status(24) + Car(i).offset_Y
+                    Else
+
+                        Car(i).AXIS_Y = -Car(i).device_status(24) - Car(i).offset_Y
+
+                    End If
+                ElseIf (Car(i).ReverseXY = 2) Then
+                    '•ŒØuπÍº∆¶r
+                    Car(i).AXIS_X = (Car(i).device_status(23) + Car(i).offset_X)
+                    Car(i).AXIS_Y = Car(i).device_status(24) + Car(i).offset_Y
+                ElseIf (Car(i).ReverseXY = 3) Then
+                    '§œ¶VX °AYØuπÍ
+                    If Car(i).offset_X >= 0 Then
+                        Car(i).AXIS_X = (Car(i).device_status(23) + Car(i).offset_X)
+                    Else
+                        Car(i).AXIS_X = -Car(i).offset_X - Car(i).device_status(23)
+                    End If
+                    Car(i).AXIS_Y = Car(i).device_status(24) + Car(i).offset_Y
+                Else
+                    'XY§œ¬‡
+                    If Car(i).offset_X >= 0 Then
+                        Car(i).AXIS_X = (Car(i).device_status(24) + Car(i).offset_X)
+                    Else
+                        Car(i).AXIS_X = -Car(i).device_status(24) - Car(i).offset_X
+                    End If
+                    If Car(i).offset_Y >= 0 Then
+                        Car(i).AXIS_Y = Car(i).device_status(23) + Car(i).offset_Y
+                    Else
+                        Car(i).AXIS_Y = -Car(i).device_status(23) - Car(i).offset_Y
+                    End If
+                        offsetTh = 90
+                End If
+
+                If Car(i).device_status(25) > 65535 / 2 Then
+                        Car(i).AXIS_Z = (Car(i).device_status(25) - 65535) / 100 + offsetTh
+                Else
+                        Car(i).AXIS_Z = (Car(i).device_status(25) / 100 + offsetTh)
+                End If
+            End If
+            ' End If
+            If Car(i).get_SOC > 0 And Car(i).get_SOC < (Car(i).Recharge_SOC - 8) And Car(i).Lock_user = "" And DateDiff("s", Car(i).Pre_TagID_time, Now) > 60 Then
+                Car(i).To_AGV(20) = 105
+            End If
+
+            If Car(i).get_auto = 0 And Car(i).get_status = 0 And Car(i).Lock_user = "" And DateDiff("s", Car(i).Pre_TagID_time, Now) > 180 Then
+                If In_String(Car(i).Recharge_Point_list, Car(i).get_tagId.ToString) And (BmsWarmIdx And Car(i).BMS1(16)) Then
+                    Car(i).To_AGV(20) = 30000 + InttoBitidx(Car(i).BMS1(16))
+                End If
+                If In_String(Car(i).Recharge_Point_list, Car(i).get_tagId.ToString) And (BmsWarmIdx And Car(i).BMS2(16)) Then
+                    Car(i).To_AGV(20) = 30100 + InttoBitidx(Car(i).BMS2(16))
+                End If
+            End If
+
+        Next
+
+        '---------------±∆ß«
+        Dim temp0 As String = ""
+        Dim temp1 As String = ""
+        Dim car_idx_list(car_no, 1) As String
+        For car_idx As Integer = 0 To car_no - 1
+            car_idx_list(car_idx, 0) = car_idx.ToString
+            If Car(car_idx).RequestTime = "" Then
+                car_idx_list(car_idx, 1) = "9999-99-99 00:00:00"
+            Else
+                car_idx_list(car_idx, 1) = Car(car_idx).RequestTime
+
+            End If
+        Next
+        For i = 0 To car_no - 1
+            For j As Integer = i + 1 To car_no
+                If String.Compare(car_idx_list(i, 1), car_idx_list(j, 1)) > 0 Then
+                    temp0 = car_idx_list(i, 0)
+                    temp1 = car_idx_list(i, 1)
+                    car_idx_list(i, 0) = car_idx_list(j, 0)
+                    car_idx_list(i, 1) = car_idx_list(j, 1)
+                    car_idx_list(j, 0) = temp0
+                    car_idx_list(j, 1) = temp1
+                End If
             Next
-            'Debug.Text = ""
-            'For i = 0 To car_no
-            'Debug.Text += car_idx_list(i, 0) + ":" + car_idx_list(i, 1) + vbCrLf
-            ' Next
-            '''''''''''''''
-            'Reserve_list = strReserve.Split(",")
-            Try
 
-                For car_idx_i As Integer = 0 To car_no
+        Next
+        'Debug.Text = ""
+        'For i = 0 To car_no
+        'Debug.Text += car_idx_list(i, 0) + ":" + car_idx_list(i, 1) + vbCrLf
+        ' Next
+        '''''''''''''''
+        'Reserve_list = strReserve.Split(",")
+        For car_idx_i As Integer = 0 To car_no - 1
 
+            Dim car_idx As Integer = 0
+            ' car_idx = CInt(car_idx_list(car_idx_i, 0)) '±∆ß«
+            car_idx = car_no - 1 - car_idx_i
 
-                    car_idx = 0
-                    car_idx = CInt(car_idx_list(car_idx_i, 0))
+            If (Car(car_idx).flag And Car(car_idx).online) Then
+                If Car(car_idx).get_Err > 0 Then
+                    Car(car_idx).Error_time += cmd_timer.Interval / 1000
+                ElseIf Car(car_idx).get_loading = 3 And Car(car_idx).get_pin = 10 And Car(car_idx).Car_type = "PIN" Then
+                    Car(car_idx).Load_time += cmd_timer.Interval / 1000
+                ElseIf Car(car_idx).get_loading = 3 And Car(car_idx).Car_type = "ROLL" Then
+                    Car(car_idx).Load_time += cmd_timer.Interval / 1000
+                Else
+                    Car(car_idx).empty_time += cmd_timer.Interval / 1000
+                End If
 
-                    If (Car(car_idx).flag And Car(car_idx).online) Then
-                        If Car(car_idx).get_Err > 0 Then
-                            Car(car_idx).Error_time += cmd_timer.Interval / 1000
-                        ElseIf Car(car_idx).get_loading = 3 And Car(car_idx).get_pin = 10 And Car(car_idx).Car_type = "PIN" Then
-                            Car(car_idx).Load_time += cmd_timer.Interval / 1000
-                        ElseIf Car(car_idx).get_loading = 3 And Car(car_idx).Car_type = "ROLL" Then
-                            Car(car_idx).Load_time += cmd_timer.Interval / 1000
-                        Else
-                            Car(car_idx).empty_time += cmd_timer.Interval / 1000
-                        End If
+                If Car(car_idx).get_auto = 0 And Not Car(car_idx).get_status = 4 And Not Car(car_idx).get_status = 8 And Not Car(car_idx).get_status = 12 And Car(car_idx).get_Err = 0 And Car(car_idx).step_i >= 999 Then
+                    '©R•O∞ı¶Ê step_i > 999
+                
+                    If Car(car_idx).cmd_idx = -2 Then '®S¶≥´›∞ı¶Ê©R•O
+                        '•˝øÔæ‹©R•O
+                        Car(car_idx).cmd_sql_idx = 0
+                        Car(car_idx).Cmd_From = 0
+                        Car(car_idx).Cmd_To = 0
+                        Car(car_idx).RequestTime = ""
+                        Car(car_idx).Requestor = ""
+                        Car(car_idx).cmd_Shelf_Car_No = 0
+                        Car(car_idx).cmd_Shelf_Car_Type = ""
+                        Car(car_idx).cmd_Shelf_Car_size = ""
+                        Car(car_idx).Cmd_RollData = ""
+                        Car(car_idx).ext_cmd = ""
+                        Car(car_idx).empty_time = 0
+                        Car(car_idx).Load_time = 0
+                        Car(car_idx).Error_time = 0
+                        Car(car_idx).path_error_count = 0
+                        Car(car_idx).path_error_tagid = 0
+                        Car(car_idx).CommandID = ""
+                        Dim select_idx As Integer = -1
+                        ' Dim temp_subcmd As String = ""
+                        Try
+                            For i = 0 To Me.ListView1.Items.Count - 1
+                                If Not Me.ListView1.Items(i).SubItems(5).Text.StartsWith("ERROR") And CInt(Me.ListView1.Items(i).SubItems(4).Text) > 0 And CInt(Me.ListView1.Items(i).SubItems(1).Text) = Car(car_idx).device_no And (Car(car_idx).Lock_user = "" Or Car(car_idx).Lock_user = Me.ListView1.Items(i).SubItems(7).Text Or CInt(Me.ListView1.Items(i).SubItems(3).Text) = 8) Then
 
-                        If Car(car_idx).get_auto = 0 And Not Car(car_idx).get_status = 4 And Car(car_idx).get_Err = 0 And Car(car_idx).step_i >= 999 Then
-                            'ÂëΩ‰ª§Âü∑Ë°å step_i > 999
+                                    select_idx = i
+                                    Exit For
+                                End If
+                            Next
+                        Catch ex As Exception
 
-                            If (Car(car_idx).get_status = 12 Or Car(car_idx).get_status = 8) And Not Car(car_idx).rate_point = Car(car_idx).get_tagId() Then
-                                Car(car_idx).rate_point = Car(car_idx).get_tagId()
-                                settext(Car(car_idx).device_no.ToString + ":Ë®≠ÂÆöÊóãËΩâÈªû‰Ωç" + Car(car_idx).rate_point.ToString + "ÔºåÁÑ°ÈáçÊñ∞Ë¶èÂäÉ")
-                            End If
-                            If Car(car_idx).cmd_idx = -2 Then 'Ê≤íÊúâÂæÖÂü∑Ë°åÂëΩ‰ª§
-                                'ÂÖàÈÅ∏ÊìáÂëΩ‰ª§
-                                Car(car_idx).cmd_sql_idx = 0
-                                Car(car_idx).Cmd_From = 0
-                                Car(car_idx).Cmd_To = 0
-                                Car(car_idx).RequestTime = ""
-                                Car(car_idx).Requestor = ""
-                                Car(car_idx).cmd_Shelf_Car_No = 0
-                                Car(car_idx).cmd_Shelf_Car_Type = ""
-                                Car(car_idx).cmd_Shelf_Car_size = ""
-                                Car(car_idx).Cmd_RollData = ""
-                                Car(car_idx).ext_cmd = ""
-                                Car(car_idx).empty_time = 0
-                                Car(car_idx).Load_time = 0
-                                Car(car_idx).Error_time = 0
-                                Car(car_idx).path_error_count = 0
-                                Car(car_idx).path_error_tagid = 0
-                                Dim select_idx As Integer = -1
-                                ' Dim temp_subcmd As String = ""
-                                Try
-                                    For i = 0 To Me.ListView1.Items.Count - 1
-                                        If Not Me.ListView1.Items(i).SubItems(5).Text.StartsWith("ERROR") And CInt(Me.ListView1.Items(i).SubItems(4).Text) > 0 And CInt(Me.ListView1.Items(i).SubItems(1).Text) = Car(car_idx).device_no And (Car(car_idx).Lock_user = "" Or Car(car_idx).Lock_user = Me.ListView1.Items(i).SubItems(7).Text Or CInt(Me.ListView1.Items(i).SubItems(3).Text) = 8) Then
-
-                                            select_idx = i
-                                            Exit For
-                                        End If
-                                    Next
-                                Catch ex As Exception
-
-                                End Try
+                        End Try
 
 
+                        If (((CInt(Car(car_idx).get_Volt) < Car(car_idx).Recharge_volt Or CInt(Car(car_idx).get_SOC) <= Car(car_idx).Recharge_SOC) And CInt(Car(car_idx).get_Volt) > 20) Or (CInt(Car(car_idx).get_Volt) = 0 And Car(car_idx).device_status(20) = 8) Or Car(car_idx).device_status(19) = 95 Or Car(car_idx).device_status(19) = 96) And Car(car_idx).Lock_user = "" And Not Car(car_idx).get_pin = 10 And Car(car_idx).get_tagId > 0 And Car(car_idx).get_loading = 0 And Not Car(car_idx).Recharge_Point_list = "" Then
+                            'If (((CInt(Car(car_idx).get_Volt) < Car(car_idx).Recharge_volt Or CInt(Car(car_idx).get_SOC) <= Car(car_idx).Recharge_SOC)) Or (CInt(Car(car_idx).get_Volt) = 0 And Car(car_idx).device_status(20) = 8) Or Car(car_idx).device_status(19) = 95 Or Car(car_idx).device_status(19) = 96) And Car(car_idx).Lock_user = "" And Not Car(car_idx).get_pin = 10 And Car(car_idx).get_tagId > 0 And Car(car_idx).get_loading = 0 And Not Car(car_idx).Recharge_Point_list = "" Then
 
-                                If (((CInt(Car(car_idx).get_Volt) < Car(car_idx).Chrage_volt Or (CInt(Car(car_idx).get_SOC) <= Car(car_idx).Recharge_SOC And BMSinfoCheck(Car(car_idx).BMS1))) And Car(car_idx).Lock_user = "" And CInt(Car(car_idx).get_Volt) > 20) Or (CInt(Car(car_idx).get_Volt) = 0 And Car(car_idx).Lock_user = "" And Car(car_idx).device_status(20) = 8)) And Not Car(car_idx).get_pin = 10 And Car(car_idx).get_tagId > 0 And Car(car_idx).Chrage_Point > 0 And Not In_Subcmd(chrage_exception.Text, Car(car_idx).get_tagId().ToString) Then
-                                    'Âº∑Âà∂ÂÖÖÈõª
-                                    ' 
-                                    settext("Car" + Car(car_idx).device_no.ToString + "Âº∑Âà∂ÂÖÖÈõª1")
-                                    If Not (Car(car_idx).get_tagId >= Car(car_idx).Chrage_Point And Car(car_idx).get_tagId <= Car(car_idx).Chrage_Point + 4) Then
-                                        settext("Car" + Car(car_idx).device_no.ToString + "Âº∑Âà∂ÂÖÖÈõª2")
+                            '±j®Ó•Rπq
+                            ' 
+                            settext("Car" + Car(car_idx).device_no.ToString + "±j®Ó•Rπq1")
+                            If Not (In_String(Car(car_idx).Recharge_Point_list, Car(car_idx).get_tagId.ToString)) Or (Car(car_idx).Car_type = "CRANE" And Car(car_idx).device_status(6) = 0) Then
+                                settext("Car" + Car(car_idx).device_no.ToString + "±j®Ó•Rπq2")
 
-                                        select_idx = -1
-                                        For i = 0 To Me.ListView1.Items.Count - 1
-                                            If Not Me.ListView1.Items(i).SubItems(5).Text.StartsWith("ERROR") And CInt(Me.ListView1.Items(i).SubItems(3).Text) >= Car(car_idx).Chrage_Point And CInt(Me.ListView1.Items(i).SubItems(3).Text) <= Car(car_idx).Chrage_Point + 4 And CInt(Me.ListView1.Items(i).SubItems(4).Text) > 0 And CInt(Me.ListView1.Items(i).SubItems(1).Text) = Car(car_idx).device_no Then
-                                                select_idx = i
-                                                Exit For
+                                select_idx = -1
+                                For i = 0 To Me.ListView1.Items.Count - 1
+                                    If In_String(Car(car_idx).Recharge_Point_list, Me.ListView1.Items(i).SubItems(3).Text) And CInt(Me.ListView1.Items(i).SubItems(4).Text) > 0 And CInt(Me.ListView1.Items(i).SubItems(1).Text) = Car(car_idx).device_no Then
+                                        select_idx = i
+                                        Exit For
+                                    End If
+                                Next
+                                If select_idx = -1 Then
+                                    Dim chargerlist() As String = Car(car_idx).Recharge_Point_list.Split(",")
+                                    For change_i As Integer = 0 To chargerlist.Length - 1
+                                        Dim flag As Boolean = False
+                                        'ßP¬_•RπqØ∏¶≥®S¶≥®Æ§l•Rπq
+                                        For j As Integer = 0 To Me.ListView1.Items.Count - 1
+                                            If (Me.ListView1.Items(j).SubItems(2).Text) = 4 And Me.ListView1.Items(j).SubItems(3).Text = chargerlist(change_i) Then
+                                                flag = True
                                             End If
                                         Next
-                                        If select_idx = -1 Then
-                                            If Car(car_idx).AutoCharge = 0 Then
-                                                For change_i As Integer = 0 To 4
-                                                    If Send_CMD(Car(car_idx).device_no, 4, Car(car_idx).Chrage_Point + change_i) = 1 Then
-                                                        change_i = 5
-                                                    End If
-                                                Next
-                                            Else
 
-                                                Dim chargerlist() As String = Car(car_idx).Recharge_Point.Split(",")
-                                                For change_i As Integer = 0 To chargerlist.Length - 1
-                                                    Dim flag As Boolean = False
-                                                    'Âà§Êñ∑ÂÖÖÈõªÁ´ôÊúâÊ≤íÊúâËªäÂ≠êÂÖÖÈõª
-                                                    For j As Integer = 0 To Me.ListView1.Items.Count - 1
-                                                        If (Me.ListView1.Items(j).SubItems(2).Text) = 4 And Me.ListView1.Items(j).SubItems(3).Text = chargerlist(change_i) Then
-                                                            flag = True
-                                                        End If
-                                                    Next
-                                                    For j As Integer = 0 To ChargerClient.Length - 1
-                                                        'Âà§Êñ∑ Ë©≤ÂÖÖÈõªÁ´ôÊ≤íÊúâÁï∞Â∏∏ÊàñÊòØËá™ÂãïÁãÄÊÖã
-                                                        If ChargerClient(i).tag_id = chargerlist(change_i) And (ChargerClient(i).HoldingResponse(19) > 0 Or ChargerClient(i).HoldingResponse(18) = 0) Then
-                                                            flag = True
-                                                        End If
-
-                                                    Next
-
-                                                    If flag = False Then
-                                                        'ÂÖÖÈõªÁ´ôIDLE
-                                                        If Send_CMD(Car(car_idx).device_no, 4, chargerlist(change_i)) Then
-                                                            Exit For
-                                                        End If
-                                                    End If
-
-
-                                                Next
-                                            End If
-
-                                        Else
-                                            Car(car_idx).cmd_sql_idx = CInt(Me.ListView1.Items(select_idx).SubItems(0).Text)
-                                            Car(car_idx).Cmd_From = CInt(Me.ListView1.Items(select_idx).SubItems(2).Text)
-                                            Car(car_idx).Cmd_To = CInt(Me.ListView1.Items(select_idx).SubItems(3).Text)
-                                            Car(car_idx).RequestTime = (Me.ListView1.Items(select_idx).SubItems(6).Text)
-                                            Car(car_idx).Requestor = (Me.ListView1.Items(select_idx).SubItems(7).Text)
-                                            Car(car_idx).cmd_Shelf_Car_No = CInt(Me.ListView1.Items(select_idx).SubItems(8).Text)
-                                            Car(car_idx).cmd_Shelf_Car_Type = Me.ListView1.Items(select_idx).SubItems(9).Text
-                                            Car(car_idx).cmd_Shelf_Car_size = Me.ListView1.Items(select_idx).SubItems(10).Text
-                                            Car(car_idx).Cmd_RollData = Me.ListView1.Items(select_idx).SubItems(11).Text
-                                            Car(car_idx).ext_cmd = Me.ListView1.Items(select_idx).SubItems(12).Text
-                                            Car(car_idx).Sql2Cmdlist()
-                                            'ÈÅ∏ÊìáÂëΩ‰ª§
-                                            If Car(car_idx).cmd_idx = 0 Then
-                                                'Á¥ÄÈåÑÈñãÂßãÂü∑Ë°åÊôÇÈñì
-                                                Query = ""
-                                                Try
-                                                    Query = "INSERT INTO `agv_cmd_history` (`CmdKey`, `AGVNo`,`CmdFrom`, `CmdTo`, `RequestTime`, `Requestor`, `Start_Time`,Shelf_Car_No,Shelf_Car_type,Shelf_Car_Size,start_distance,ext_cmd) "
-                                                    Query += "VALUES ('" + Car(car_idx).cmd_sql_idx.ToString + "','" + Car(car_idx).device_no.ToString + "','" + Car(car_idx).Cmd_From.ToString + "', '" + Car(car_idx).Cmd_To.ToString + "', '" + Car(car_idx).RequestTime + "', '" + Car(car_idx).Requestor + "',now()," + Car(car_idx).cmd_Shelf_Car_No.ToString + ",'" + Car(car_idx).cmd_Shelf_Car_Type + "','" + Car(car_idx).cmd_Shelf_Car_size + "'," + Car(car_idx).get_distance.ToString + ",'" + Car(car_idx).ext_cmd + "');"
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-                                                    Query = "update agv_cmd_list set CMD_Status='" + Car(car_idx).cmd_list(Car(car_idx).cmd_idx) + "',Pri_Wt=999 where CmdKey =" + Car(car_idx).cmd_sql_idx.ToString
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-                                                Catch ex As Exception
-                                                    settext(Query + ":" + ex.Message)
-                                                End Try
+                                        If flag = False Then
+                                            '•RπqØ∏IDLE
+                                            If Send_CMD(Car(car_idx).device_no, 4, chargerlist(change_i)) Then
+                                                Exit For
                                             End If
                                         End If
-                                    Else
-                                        Car(car_idx).To_AGV(20) = 105 'ÈõªÂ£ì‰Ωé‰∏ã
-
-                                    End If
 
 
-                                ElseIf Not select_idx = -1 Then
+                                    Next
+
+                                Else
                                     Car(car_idx).cmd_sql_idx = CInt(Me.ListView1.Items(select_idx).SubItems(0).Text)
                                     Car(car_idx).Cmd_From = CInt(Me.ListView1.Items(select_idx).SubItems(2).Text)
                                     Car(car_idx).Cmd_To = CInt(Me.ListView1.Items(select_idx).SubItems(3).Text)
@@ -1343,14 +2156,21 @@ Public Class Form1
                                     Car(car_idx).cmd_Shelf_Car_size = Me.ListView1.Items(select_idx).SubItems(10).Text
                                     Car(car_idx).Cmd_RollData = Me.ListView1.Items(select_idx).SubItems(11).Text
                                     Car(car_idx).ext_cmd = Me.ListView1.Items(select_idx).SubItems(12).Text
+                                    Car(car_idx).CommandID = Me.ListView1.Items(select_idx).SubItems(13).Text
+
+                                    comQGWrapper.EventReportSendOb(GEM.EVENT_CraneActive, Car(car_idx).CommandID + "," + comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString)
+
                                     Car(car_idx).Sql2Cmdlist()
-                                    'ÈÅ∏ÊìáÂëΩ‰ª§
+
+                                    'øÔæ‹©R•O
                                     If Car(car_idx).cmd_idx = 0 Then
-                                        'Á¥ÄÈåÑÈñãÂßãÂü∑Ë°åÊôÇÈñì
+                                        '¨ˆø˝∂}©l∞ı¶ÊÆ…∂°
                                         Query = ""
                                         Try
-                                            Query = "INSERT INTO `agv_cmd_history` (`CmdKey`, `AGVNo`,`CmdFrom`, `CmdTo`, `RequestTime`, `Requestor`, `Start_Time`,Shelf_Car_No,Shelf_Car_type,Shelf_Car_Size,start_distance,ext_cmd) "
-                                            Query += "VALUES ('" + Car(car_idx).cmd_sql_idx.ToString + "','" + Car(car_idx).device_no.ToString + "','" + Car(car_idx).Cmd_From.ToString + "', '" + Car(car_idx).Cmd_To.ToString + "', '" + Car(car_idx).RequestTime + "', '" + Car(car_idx).Requestor + "',now()," + Car(car_idx).cmd_Shelf_Car_No.ToString + ",'" + Car(car_idx).cmd_Shelf_Car_Type + "','" + Car(car_idx).cmd_Shelf_Car_size + "'," + Car(car_idx).get_distance.ToString + ",'" + Car(car_idx).ext_cmd + "');"
+                                            Query = "INSERT INTO `agv_cmd_history` (`CmdKey`, `AGVNo`,`CmdFrom`, `CmdTo`, `RequestTime`, `Requestor`, `Start_Time`,Shelf_Car_No,Shelf_Car_type,Shelf_Car_Size,start_distance,ext_cmd,McsCmdKey,RollData,cmdstart) "
+                                            Query += "VALUES ('" + Car(car_idx).cmd_sql_idx.ToString + "','" + Car(car_idx).device_no.ToString + "','" + Car(car_idx).Cmd_From.ToString + "', '" + Car(car_idx).Cmd_To.ToString + "', '" + Car(car_idx).RequestTime + "', '" + Car(car_idx).Requestor + "',now()," + Car(car_idx).cmd_Shelf_Car_No.ToString + _
+                                                ",'" + Car(car_idx).cmd_Shelf_Car_Type + "','" + Car(car_idx).cmd_Shelf_Car_size + "'," + Car(car_idx).get_distance.ToString + ",'" + _
+                                                Car(car_idx).ext_cmd + "','" + Car(car_idx).CommandID + "','" + Car(car_idx).Cmd_RollData + "'," + Car(car_idx).get_tagId.ToString + ");"
                                             sqlCommand.CommandText = Query
                                             sqlCommand.ExecuteNonQuery()
                                             Query = "update agv_cmd_list set CMD_Status='" + Car(car_idx).cmd_list(Car(car_idx).cmd_idx) + "',Pri_Wt=999 where CmdKey =" + Car(car_idx).cmd_sql_idx.ToString
@@ -1360,1305 +2180,1861 @@ Public Class Form1
                                             settext(Query + ":" + ex.Message)
                                         End Try
                                     End If
-
                                 End If
+                            Else
+                                If Not Car(car_idx).Car_type = "CRANE" Then
+
+
+                                    Car(car_idx).To_AGV(20) = 105 'πq¿£ßC§U
+                                End If
+
 
                             End If
 
-                            If Not Car(car_idx).cmd_idx = -2 Then 'Ê≤íÊúâÂæÖÂü∑Ë°åÂëΩ‰ª§
-                                ' ÈñãÂßãÂü∑Ë°åÂëΩ‰ª§
-                                'Á¢∫Ë™çÂëΩ‰ª§Êú™Ë¢´Âà™Èô§
-                                Dim check_idx As Boolean = Check_SQL_idx(Car(car_idx).cmd_sql_idx)
-                                settext(Car(car_idx).device_no.ToString + ":CheckSQL:" + check_idx.ToString + ":" + Car(car_idx).cmd_sql_idx.ToString)
-                                ' If check_idx Or (My.Settings.chrage_flag And Car(car_idx).Cmd_To = Car(car_idx).Chrage_Point) Then
-                                '-----------------
-                                If (DateDiff("s", Car(car_idx).Pre_TagID_time, Now) > AgvTimeoutVal) Then
-                                    Car(car_idx).To_AGV(20) = 115 'Â∞çÂ≥ôTimeOut
 
-                                End If
-                                If check_idx Then
-                                    Select Case Car(car_idx).cmd_list(Car(car_idx).cmd_idx)
-                                        Case ""
-                                            Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "FINSH"
-                                            settext("cmd_list empty,cmd_idx:" + Car(car_idx).cmd_idx.ToString + " cmd_sql_idx" + Car(car_idx).cmd_sql_idx.ToString)
-                                        Case "TagID->0"
-                                            Car(car_idx).subcmd = "1"
-                                            Car(car_idx).force_tagId(1)
-                                        Case ("STOP")
-                                            Car(car_idx).step_i = 902
-                                        Case "CheckLifter"
-                                            Car(car_idx).cmd_idx += 1
-                                        Case "Manual_Forward"
-                                            Car(car_idx).step_i = 21
-                                            Car(car_idx).cmd_idx += 1
-                                        Case "Manual_Backward"
-                                            Car(car_idx).step_i = 31
-                                            Car(car_idx).cmd_idx += 1
-                                        Case "KeepManual"
-                                            If Car(car_idx).step_i = 999 Then
-                                                Car(car_idx).cmd_idx += 1
-                                            End If
-                                        Case "CHECK_START"
-                                            If Car(car_idx).Car_type = "PIN" Or Car(car_idx).Car_type = "POWER" Or Car(car_idx).Car_type = "POWER2" Or Car(car_idx).Car_type = "LOWCAR" Then
-                                                If Car(car_idx).get_pin = 5 Then
-                                                    Car(car_idx).To_AGV(6) = 0
-                                                    Car(car_idx).cmd_idx += 1
-                                                ElseIf Car(car_idx).device_no = 6 And Car(car_idx).get_loading = 3 And Car(car_idx).get_pin = 10 And Car(car_idx).get_tagId() = 9000 Then
-
-                                                    Car(car_idx).cmd_idx = 8
-
-                                                ElseIf Car(car_idx).get_loading = 3 And Car(car_idx).get_pin = 10 And (Car(car_idx).get_Shelf_Car_No = Car(car_idx).cmd_Shelf_Car_No Or Car(car_idx).get_Shelf_Car_No = 0) Then
-                                                    'ËºâÁâ©ËàáÁâ©ÂìÅ‰∏ÄËá¥
-                                                    If Car(car_idx).Car_type = "LOWCAR" Then
-                                                        Car(car_idx).cmd_idx = 8
-                                                    Else
-                                                        Car(car_idx).cmd_idx = 6
-                                                    End If
-
-                                                ElseIf Car(car_idx).get_loading = 3 And Car(car_idx).get_pin = 10 Then
-
-                                                    Car(car_idx).To_AGV(20) = 104 'ÊúâÊñôÁÑ°Â∏≥
-
-                                                Else
-                                                    Car(car_idx).To_AGV(6) = 4 'PIN ‰∏ãÈôç
-                                                End If
-
-                                            ElseIf Car(car_idx).Car_type = "ROLL" Then
-                                                If Car(car_idx).get_loading = 3 Then
-                                                    Car(car_idx).cmd_idx = 7
-
-                                                    'ElseIf Car(car_idx).get_loading = 3 Then
-
-                                                    '    Car(car_idx).To_AGV(20) = 104 'ÊúâÊñôÁÑ°Â∏≥
-                                                Else
-                                                    Car(car_idx).cmd_idx += 1
-                                                End If
-                                            ElseIf Car(car_idx).Car_type = "LFT" Then
-                                                If Car(car_idx).get_tagId() Mod 10 = 0 Or Car(car_idx).get_loading = 3 Then
-                                                    Car(car_idx).To_AGV(20) = 104 'ÊúâÊñôÁÑ°Â∏≥
-                                                Else
-                                                    Car(car_idx).cmd_idx += 1
-                                                End If
-                                            ElseIf Car(car_idx).Car_type = "FORK" Then
-                                                If Car(car_idx).get_loading = 3 And Car(car_idx).get_pin = 10 Then
-                                                    Car(car_idx).cmd_idx = 8
-                                                Else
-                                                    Car(car_idx).cmd_idx += 1
-                                                End If
-
-                                            End If
-
-                                        Case "Check_Loading"
-
-                                            settext("Check_Loading:" + Agvc_shelfcheck.Checked.ToString)
-                                            If Agvc_shelfcheck.Checked = False And Loading_Check.Checked = False Then
-                                                'bypass Âú®Ëç∑Ê™¢Êü•
-                                                Car(car_idx).cmd_idx += 1
-                                            ElseIf Car(car_idx).get_loading = 3 And Loading_Check.Checked Then
-                                                'Êõ¥Êñ∞Ë≥áÊñôÂ∫´
-                                                If Car(car_idx).Car_type = "PIN" Then
-                                                    If Car(car_idx).get_Shelf_Car_No() = Car(car_idx).cmd_Shelf_Car_No Then
-                                                        Car(car_idx).cmd_idx += 1
-                                                    Else
-                                                        Car(car_idx).To_AGV(20) = 101
-                                                        Car(car_idx).cmd_idx = -2
-                                                        Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
-                                                    End If
-                                                ElseIf Car(car_idx).Car_type = "ROLL" Then
-                                                    Car(car_idx).cmd_idx += 1
-                                                End If
-                                            Else
-                                                'Car(car_idx).cmd_idx = -2
-                                                'Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
-                                                'Car(car_idx).To_AGV(20) = 100
-                                            End If
-                                        Case "CHECK_LOAD"
-                                            'Á¢∫Ë™çÁãÄÊÖã 
-                                            If Car(car_idx).Car_type = "LFT" Then
-                                                If Car(car_idx).get_loading = 0 Or Car(car_idx).get_tagId() Mod 10 = 0 Then
-                                                    Car(car_idx).To_AGV(20) = 104 'ÊúâÊñôÁÑ°Â∏≥
-                                                Else
-                                                    Car(car_idx).cmd_idx += 1
-                                                End If
-                                            ElseIf Car(car_idx).Car_type = "ROLL" Then
-                                                Dim checkeq As Integer = 0
-                                                Query = "select count(*) FROM `eqp` where Tag_ID=" + Car(car_idx).get_tagId.ToString + " and load_req=1"
-                                                sqlCommand.CommandText = Query
-                                                checkeq = CInt(sqlCommand.ExecuteScalar())
-
-                                                Car(car_idx).cmd_idx += 1
-                                                If checkeq = 0 Then
-                                                    Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "FINSH"
-                                                End If
-                                            Else
-                                                Car(car_idx).cmd_idx += 1
-                                            End If
-
-                                        Case "CHECK_UNLOAD"
-                                            Dim checkeq As Integer = 0
-                                            Query = "select count(*) FROM `eqp` where Tag_ID=" + Car(car_idx).get_tagId.ToString + " and unload_sensor=1"
-                                            sqlCommand.CommandText = Query
-                                            checkeq = CInt(sqlCommand.ExecuteScalar())
-                                            Car(car_idx).cmd_idx += 1
-                                            If checkeq = 0 Then
-                                                Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "FINSH"
-                                            End If
-                                        Case "CHECK_UNLOCK"
-                                            'If Car(car_idx).get_Shelf_Car_No > 0 Then
-                                            For ii As Integer = 0 To shelf_car.Length - 1
-                                                If shelf_car(ii).Shelf_Car_No = Car(car_idx).cmd_Shelf_Car_No And shelf_car(ii).UNLOCK = 1 And shelf_car(ii).step_i = 3 Then
-                                                    'Â∞çË±°Ëß£Èéñ
-                                                    Car(car_idx).cmd_idx += 1
-                                                End If
-                                            Next
-                                            'End If
-                                        Case "LOCK"
-                                            Car(car_idx).Lock_user = Car(car_idx).Requestor
-                                            Query = "UPDATE `agv_list` SET `lock_user` = '" + Car(car_idx).Lock_user + "' WHERE `AGVNo` = " + Car(car_idx).device_no.ToString + ";"
-                                            sqlCommand.CommandText = Query
-                                            sqlCommand.ExecuteNonQuery()
-                                            Car(car_idx).cmd_idx += 1
-                                        Case "UNLOCK"
-                                            Car(car_idx).Lock_user = ""
-                                            Query = "UPDATE `agv_list` SET `lock_user` = '" + Car(car_idx).Lock_user + "' WHERE `AGVNo` = " + Car(car_idx).device_no.ToString + ";"
-                                            sqlCommand.CommandText = Query
-                                            sqlCommand.ExecuteNonQuery()
-
-                                            Car(car_idx).cmd_idx += 1
-                                        Case "Forward_TagID"
-                                            Car(car_idx).tagId(0) = Car(car_idx).get_tagId()
-                                            Car(car_idx).action(0) = &H110
-                                            Car(car_idx).action(1) = 3
-                                            For i = 1 To 29
-                                                Car(car_idx).tagId(i) = 0
-                                                Car(car_idx).action(i * 2) = 0
-                                                Car(car_idx).action(i * 2 + 1) = 0
-                                            Next
-                                            Car(car_idx).step_i = 1
-                                            Car(car_idx).cmd_idx += 1
-                                        Case "Backward_TagID"
-                                            Car(car_idx).tagId(0) = Car(car_idx).get_tagId()
-                                            Car(car_idx).action(0) = &H111
-                                            Car(car_idx).action(1) = 3
-                                            For i = 1 To 240 - 1
-                                                Car(car_idx).tagId(i) = 0
-                                                Car(car_idx).action(i * 2) = 0
-                                                Car(car_idx).action(i * 2 + 1) = 0
-                                            Next
-                                            Car(car_idx).step_i = 1
-                                            Car(car_idx).cmd_idx += 1
-
-                                        Case "PINUP"
-                                            settext("PINUP")
-                                            If Car(car_idx).get_pin = 10 Then
-                                                Car(car_idx).To_AGV(6) = 0
-                                                Car(car_idx).cmd_idx += 1
-                                                If Car(car_idx).Car_type = "FORK" Then
-                                                    Query = " update `agv_list` A,`agv_buffer` B  set A.RollData=B.Buf_Type "
-                                                    Query += " where A.AGVNo=" + Car(car_idx).device_no.ToString + " and B.TagID=" + Car(car_idx).get_tagId().ToString + " "
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-
-                                                    'buffer
-                                                    Query = "update `agv_buffer`  set Buf_Layer=Buf_Layer-1,Buf_Type=if(Buf_Layer=1,'',Buf_Type),LM_Time=now(),LM_User='AGVC_AGVC_PINUP' "
-                                                    Query += " where  TagID=" + Car(car_idx).get_tagId().ToString + " and Buf_Layer > 0 "
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-                                                    'add
-                                                    Query = "update `agv_buffer`  set Buf_Type='',LM_Time=now(),LM_User='AGVC_TAKE_UP' "
-                                                    Query += " where  Buf_Layer = 0 "
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-
-                                                End If
-                                            Else
-                                                Car(car_idx).To_AGV(6) = 2
-                                            End If
-                                        Case "PINDOWNFORK"
-                                            settext("PINDOWNFORK") 'just pindowm
-                                            If Car(car_idx).get_pin = 5 Then
-                                                Car(car_idx).To_AGV(6) = 0
-                                                Car(car_idx).cmd_idx += 1
-                                            Else
-                                                Car(car_idx).To_AGV(6) = 4
-                                            End If
-                                        Case "PINDOWN"
-                                            settext("PINDOWN")
-                                            If Car(car_idx).get_pin = 5 Then
-                                                Car(car_idx).To_AGV(6) = 0
-                                                Car(car_idx).cmd_idx += 1
-                                                If Car(car_idx).Car_type = "FORK" Then
-                                                    'ÈÅéÂ∏≥BUFFER
-                                                    'ÈÅéÂ∏≥Âà∞buffer
-                                                    Query = "update `shelf_car` set LOCATION=" + Car(car_idx).get_tagId.ToString + ",updateTime=now(),updateName='PinDownByFork' where Shelf_Car_No=" + Car(car_idx).cmd_Shelf_Car_No.ToString
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-
-                                                    Query = "update `agv_buffer` A ,agv_list B  set A.Buf_Layer=if(B.RollData='pallet',A.Buf_Layer+1,1),A.Buf_Type=B.RollData ,A.LM_Time=now(),A.LM_User='AGVC_PINDOWN' "
-                                                    Query += " where  TagID=" + Car(car_idx).get_tagId().ToString + " and B.AGVNo=" + Car(car_idx).device_no.ToString
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-                                                    'Èô§Â∏≥
-                                                    Query = " update `agv_list` A  set A.RollData='' "
-                                                    Query += " where A.AGVNo=" + Car(car_idx).device_no.ToString
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-                                                    Car(car_idx).cmd_Shelf_Car_No = 0
-                                                    Car(car_idx).To_AGV(6) = 0
-                                                End If
-                                            Else
-
-                                                If Car(car_idx).get_Shelf_Car_No > 0 And Agvc_shelfcheck.Checked = True Then
-                                                    Query = "update `shelf_car` set LOCATION=0,updateTime=now(),updateName='AGVC" + Car(car_idx).cmd_idx.ToString + "' where LOCATION=" + Car(car_idx).get_tagId.ToString + " and not  Shelf_Car_No=" + Car(car_idx).get_Shelf_Car_No.ToString
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-
-                                                    Query = "update `shelf_car` set LOCATION=" + Car(car_idx).get_tagId.ToString + ",updateTime=now(),updateName='PINDOWN' where Shelf_Car_No=" + Car(car_idx).get_Shelf_Car_No.ToString
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-                                                End If
-                                                Car(car_idx).To_AGV(6) = 4
-                                            End If
-                                        Case "ROLLIN"
-                                            settext("ROLLIN")
-                                            ' Car(car_idx).cmd_idx += 1
-                                            'If Car(car_idx).get_loading = 0 Then
-                                            Car(car_idx).To_AGV(6) = &H20
-                                            If Car(car_idx).get_pin >= 8 And Car(car_idx).get_action = &H20 And Car(car_idx).get_Err = 0 Then
-                                                'Áï∞Â∏∏ÁµêÊùü
-                                                settext(Car(car_idx).device_no.ToString + ":Áï∞Â∏∏ÁµêÊùü")
-                                                Car(car_idx).To_AGV(6) = 0
-                                                If Car(car_idx).get_loading = 3 Then
-
-
-                                                    Car(car_idx).cmd_idx += 1
-                                                    Car(car_idx).RollData = Car(car_idx).Cmd_RollData
-                                                    Try
-                                                        If Car(car_idx).get_Shelf_Car_No > 0 Then
-                                                            Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'IN', '" + Car(car_idx).RollData + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
-
-                                                        Else
-                                                            Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'IN', '" + Car(car_idx).get_Shelf_Car_No.ToString + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
-
-                                                        End If
-                                                        sqlCommand.CommandText = Query
-                                                        sqlCommand.ExecuteNonQuery()
-                                                    Catch ex As Exception
-                                                        settext("ex:" + ex.Message)
-                                                        settext("mysqlerror:" + Query)
-                                                    End Try
-
-
-                                                    Query = "UPDATE `agv_list` SET `RollData` = '" + Car(car_idx).RollData + "' WHERE `AGVNo` = '" + Car(car_idx).device_no.ToString + "';"
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-                                                    Query = "INSERT ignore INTO  `alarm` (`cmd_idx`, `HAPPEN_DATE`, `CLEAR_DATE`, `ALM_ID`, `ALM_DEVICE`, `ALM_TYPE`, `ALM_MSG`, `SUB_LOC`, `ALARM_SPACE`, `CST_ID`) "
-                                                    Query += "VALUES ('" + Car(car_idx).cmd_sql_idx.ToString + "',now(),now(), '201', '" + Car(car_idx).device_no.ToString + "', '', '', '" + Car(car_idx).get_tagId.ToString + "', '', '" + Car(car_idx).Shelf_Car_No.ToString + "') ;"
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-                                                Else
-                                                    Car(car_idx).cmd_idx += 1
-                                                    Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "FINSH"
-                                                    Try
-                                                        If Car(car_idx).get_Shelf_Car_No > 0 Then
-                                                            Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'IN', '" + Car(car_idx).get_Shelf_Car_No.ToString + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
-                                                        Else
-                                                            Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'IN', '" + Car(car_idx).RollData + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
-
-                                                        End If
-
-                                                        sqlCommand.CommandText = Query
-                                                        sqlCommand.ExecuteNonQuery()
-                                                    Catch ex As Exception
-                                                        settext("ex:" + ex.Message)
-                                                        settext("mysqlerror:" + Query)
-                                                    End Try
-                                                End If
-                                            ElseIf Car(car_idx).get_pin = 2 And Car(car_idx).get_action = &H20 And Car(car_idx).get_Err = 0 Then
-                                                Car(car_idx).To_AGV(6) = 0
-                                                Car(car_idx).cmd_idx += 1
-                                                Car(car_idx).RollData = Car(car_idx).Cmd_RollData
-                                                Try
-                                                    If Car(car_idx).get_Shelf_Car_No > 0 Then
-                                                        Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'IN', '" + Car(car_idx).get_Shelf_Car_No.ToString + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
-
-                                                    Else
-                                                        Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'IN', '" + Car(car_idx).RollData + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
-
-                                                    End If
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-                                                Catch ex As Exception
-                                                    settext("ex:" + ex.Message)
-                                                    settext("mysqlerror:" + Query)
-                                                End Try
-
-
-                                                Query = "UPDATE `agv_list` SET `RollData` = '" + Car(car_idx).RollData + "' WHERE `AGVNo` = '" + Car(car_idx).device_no.ToString + "';"
-                                                sqlCommand.CommandText = Query
-                                                sqlCommand.ExecuteNonQuery()
-                                            End If
-
-                                            'End If
-                                        Case "ROLLOUT"
-                                            settext("ROLLOUT")
-                                            If Car(car_idx).To_AGV(6) = 0 Then
-                                                Try
-                                                    If Car(car_idx).get_Shelf_Car_No > 0 Then
-                                                        Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'OUT', '" + Car(car_idx).get_Shelf_Car_No.ToString + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
-                                                    Else
-                                                        Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'OUT', '" + Car(car_idx).RollData + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
-
-                                                    End If
-
-
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-                                                Catch ex As Exception
-                                                    settext("ex:" + ex.Message)
-                                                    settext("mysqlerror:" + Query)
-                                                End Try
-                                            End If
-
-                                            If Car(car_idx).To_AGV(6) = &H20 Then
-                                                Car(car_idx).To_AGV(6) = &H20
-                                            Else
-                                                Car(car_idx).To_AGV(6) = &H10
-                                            End If
-
-
-                                            If Car(car_idx).get_pin >= 8 And (Car(car_idx).get_action = &H10 Or Car(car_idx).get_action = &H20) And Car(car_idx).get_Err = 0 Then
-                                                'Áï∞Â∏∏ÁµêÊùü
-                                                settext(Car(car_idx).device_no.ToString + ":Áï∞Â∏∏ÁµêÊùü")
-                                                Car(car_idx).To_AGV(6) = 0
-                                                Car(car_idx).cmd_idx += 1
-                                                '---------
-                                                'Try
-                                                '    Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'OUT', '" + Car(car_idx).RollData + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
-                                                '    sqlCommand.CommandText = Query
-                                                '    sqlCommand.ExecuteNonQuery()
-                                                'Catch ex As Exception
-                                                '    settext("ex:" + ex.Message)
-                                                '    settext("mysqlerror:" + Query)
-                                                'End Try
-                                                '------------
-                                                'Car(car_idx).RollData = "" 'ËªäÂ≠êÈô§Â∏≥
-                                                'Query = "UPDATE `agv_list` SET `RollData` = '" + Car(car_idx).RollData + "' WHERE `AGVNo` = '" + Car(car_idx).device_no.ToString + "';"
-                                                'sqlCommand.CommandText = Query
-                                                'sqlCommand.ExecuteNonQuery()
-                                                Query = "INSERT ignore INTO  `alarm` (`cmd_idx`, `HAPPEN_DATE`, `CLEAR_DATE`, `ALM_ID`, `ALM_DEVICE`, `ALM_TYPE`, `ALM_MSG`, `SUB_LOC`, `ALARM_SPACE`, `CST_ID`) "
-                                                Query += "VALUES ('" + Car(car_idx).cmd_sql_idx.ToString + "',now(),now(), '201', '" + Car(car_idx).device_no.ToString + "', '', '', '" + Car(car_idx).get_tagId.ToString + "', '', '" + Car(car_idx).Shelf_Car_No.ToString + "') ;"
-                                                sqlCommand.CommandText = Query
-                                                sqlCommand.ExecuteNonQuery()
-                                            ElseIf Car(car_idx).get_pin = 2 And Car(car_idx).get_action = &H10 And Car(car_idx).get_Err = 0 Then
-                                                ' Âè™ÊúâROLLOUT
-                                                settext(Car(car_idx).device_no.ToString + ":Âè™ÊúâROLLOUT")
-                                                Car(car_idx).To_AGV(6) = 0
-                                                Car(car_idx).cmd_idx += 1
-                                                '   '---------
-                                                'Try
-                                                '    Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'OUT', '" + Car(car_idx).RollData + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
-                                                '    sqlCommand.CommandText = Query
-                                                '    sqlCommand.ExecuteNonQuery()
-                                                'Catch ex As Exception
-                                                '    settext("ex:" + ex.Message)
-                                                '    settext("mysqlerror:" + Query)
-                                                'End Try
-                                                '---------
-                                                Car(car_idx).RollData = "" 'ËªäÂ≠êÈô§Â∏≥
-                                                Query = "UPDATE `agv_list` SET `RollData` = '" + Car(car_idx).RollData + "' WHERE `AGVNo` = '" + Car(car_idx).device_no.ToString + "';"
-                                                sqlCommand.CommandText = Query
-                                                sqlCommand.ExecuteNonQuery()
-                                            ElseIf (Car(car_idx).get_pin = 6 Or Car(car_idx).get_pin = 2) And Car(car_idx).get_action = &H20 And Car(car_idx).get_Err = 0 Then
-                                                settext("ExchangeÊ®°ÂºèÁµêÊùü")
-                                                Car(car_idx).To_AGV(6) = 0
-                                                Car(car_idx).cmd_idx += 1
-                                                '---------
-                                                'Try
-                                                '    Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'OUT', '" + Car(car_idx).RollData + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
-                                                '    sqlCommand.CommandText = Query
-                                                '    sqlCommand.ExecuteNonQuery()
-                                                'Catch ex As Exception
-                                                '    settext("ex:" + ex.Message)
-                                                '    settext("mysqlerror:" + Query)
-                                                'End Try
-                                                Car(car_idx).RollData = "" 'ËªäÂ≠êÈô§Â∏≥
-                                                Query = "UPDATE `agv_list` SET `RollData` = '" + Car(car_idx).RollData + "' WHERE `AGVNo` = '" + Car(car_idx).device_no.ToString + "';"
-                                                sqlCommand.CommandText = Query
-                                                sqlCommand.ExecuteNonQuery()
-                                            ElseIf Car(car_idx).get_pin = 6 And Car(car_idx).get_action = &H10 And Car(car_idx).get_Err = 0 Then
-                                                settext("Exchange:Êî∂ÁÆ±")
-                                                Car(car_idx).To_AGV(6) = &H20
-                                            End If
-                                        Case "ROBOT"
-
-
-                                            Dim ext_cmd_list() As String = Car(car_idx).ext_cmd.Split(",")
-
-                                            If ext_cmd_list.Length = 3 Then
-                                                If IsNumeric(ext_cmd_list(0)) And IsNumeric(ext_cmd_list(1)) Then
-
-                                                    Car(car_idx).To_AGV(6) = CInt(ext_cmd_list(0))
-                                                    Car(car_idx).To_AGV(7) = CInt(ext_cmd_list(1))
-                                                    Car(car_idx).To_AGV(8) = CInt(ext_cmd_list(2))
-                                                    If Car(car_idx).get_pin = 2 And Car(car_idx).get_action = Car(car_idx).To_AGV(6) And Car(car_idx).get_Err = 0 Then
-                                                        Car(car_idx).To_AGV(6) = 0
-                                                        Car(car_idx).To_AGV(7) = 0
-                                                        Car(car_idx).To_AGV(8) = 0
-                                                        Car(car_idx).cmd_idx += 1
-                                                    End If
-                                                End If
-                                            End If
-                                        Case "ACTION"
-                                            Dim ext_cmd_list() As String = Car(car_idx).ext_cmd.Split(",")
-                                            If ext_cmd_list.Length = 3 Then
-                                                If IsNumeric(ext_cmd_list(0)) And IsNumeric(ext_cmd_list(1)) And IsNumeric(ext_cmd_list(2)) Then
-
-                                                    Car(car_idx).To_AGV(6) = CInt(ext_cmd_list(0))
-                                                    Car(car_idx).To_AGV(7) = CInt(ext_cmd_list(1))
-                                                    Car(car_idx).To_AGV(8) = CInt(ext_cmd_list(2))
-
-                                                    If Car(car_idx).get_interlock = 2 And Car(car_idx).get_action = Car(car_idx).To_AGV(6) And Car(car_idx).get_Err = 0 Then
-                                                        Car(car_idx).To_AGV(6) = 0
-                                                        Car(car_idx).To_AGV(7) = 0
-                                                        Car(car_idx).To_AGV(8) = 0
-                                                        Car(car_idx).cmd_idx += 1
-                                                    End If
-                                                Else
-                                                    Car(car_idx).cmd_idx += 1
-                                                End If
-                                            End If
-                                        Case "ADDPOINT"
-                                            'Ê®ìÂ±§ ID 2DX 2DY 0 0 0 0
-                                            Dim ext_cmd_list() As String = Car(car_idx).ext_cmd.Split(",")
-                                            If ext_cmd_list.Length = 7 Then
-
-                                                If IsNumeric(ext_cmd_list(0)) And IsNumeric(ext_cmd_list(1)) Then
-                                                    Car(car_idx).To_AGV(13) = 2
-
-                                                    Car(car_idx).To_AGV(21) = CInt(ext_cmd_list(0))
-                                                    Car(car_idx).To_AGV(22) = CInt(ext_cmd_list(1))
-                                                    Car(car_idx).To_AGV(23) = CInt(ext_cmd_list(2)) >> 16 'Z
-                                                    Car(car_idx).To_AGV(24) = CInt(ext_cmd_list(2)) Mod 65536
-
-                                                    Car(car_idx).To_AGV(25) = CInt(ext_cmd_list(3)) >> 16 'Y
-                                                    Car(car_idx).To_AGV(26) = CInt(ext_cmd_list(3)) Mod 65536
-
-                                                    Car(car_idx).To_AGV(27) = CInt(ext_cmd_list(4)) >> 16 'Z
-                                                    Car(car_idx).To_AGV(28) = CInt(ext_cmd_list(4)) Mod 65536
-                                                    Car(car_idx).To_AGV(29) = CInt(ext_cmd_list(5)) 'AGV Val
-                                                    Car(car_idx).To_AGV(30) = CInt(ext_cmd_list(6))
-
-                                                    If Car(car_idx).device_status(13) = 2 Then 'Ê™¢Êü•bit 1
-                                                        'Ë¶ÅÂª∫Á´ãÈªû‰Ωç
-                                                        Car(car_idx).To_AGV(13) = 0
-
-                                                        Car(car_idx).cmd_idx += 1
-                                                    End If
-                                                End If
-                                            End If
-
-                                        Case "CHARGE"
-
-                                            Car(car_idx).To_AGV(6) = 48
-                                            If Car(car_idx).device_status(9) And Car(car_idx).get_action = 48 And Car(car_idx).get_Err = 0 Then
-                                                Car(car_idx).Counter_timer = Now()
-                                                Car(car_idx).cmd_idx += 1
-                                            End If
-                                        Case "CHARGING"
-                                            Car(car_idx).To_AGV(6) = 48
-                                            If Car(car_idx).AutoCharge = 1 Then
-                                                '1ÁôæÂàÜÊØî
-                                                If Car(car_idx).get_SOC > Car(car_idx).AutoChargeVal Then
-                                                    Car(car_idx).To_AGV(6) = 0
-                                                    Car(car_idx).cmd_idx += 1
-                                                    settext(Car(car_idx).device_no.ToString + "CHARGINGSOCÈ´òÊñºË®≠ÂÆöÂÄºÔºåÁµÇÊ≠¢ÂÖÖÈõª")
-                                                End If
-                                            ElseIf Car(car_idx).AutoCharge = 2 Then
-                                                ' 2ÁµïÂ∞çÊôÇÈñì
-                                                If (DateDiff("n", Car(car_idx).Counter_timer, Now) > Car(car_idx).AutoChargeVal) Then
-                                                    Car(car_idx).To_AGV(6) = 0
-                                                    Car(car_idx).cmd_idx += 1
-                                                    settext(Car(car_idx).device_no.ToString + "CHARGINGÂÆöÊôÇÂà∞ÔºåÁµÇÊ≠¢ÂÖÖÈõª")
-                                                End If
-
-                                            ElseIf Car(car_idx).AutoCharge = 3 Then
-                                                'ÊúÄ‰ΩéÊôÇÈñìÂëΩ‰ª§ÂÑ™ÂÖà
-                                                If (DateDiff("n", Car(car_idx).Counter_timer, Now) > Car(car_idx).AutoChargeVal) Then
-                                                    For k As Integer = 0 To ListView1.Items.Count - 1
-                                                        If Not ListView1.Items(k).SubItems(2).Text = "4" And ListView1.Items(k).SubItems(1).Text = Car(car_idx).device_no.ToString Then
-                                                            settext(Car(car_idx).device_no.ToString + ":CHARGING other cmd" + ListView1.Items(k).SubItems(0).Text)
-                                                            Car(car_idx).To_AGV(6) = 0
-                                                            Car(car_idx).cmd_idx += 1
-                                                            Exit For
-                                                        End If
-                                                    Next
-                                                ElseIf (DateDiff("n", Car(car_idx).Counter_timer, Now) > Car(car_idx).AutoChargeVal + 120) Then
-                                                    settext(Car(car_idx).device_no.ToString + "CHARGINGÂÆöÊôÇÂà∞120ÂàÜÈêòÔºåÁµÇÊ≠¢ÂÖÖÈõª")
-                                                    Car(car_idx).To_AGV(6) = 0
-                                                    Car(car_idx).cmd_idx += 1
-                                                End If
-
-                                            Else
-                                                settext(Car(car_idx).device_no.ToString + "ÁÑ°Ë®≠ÂÆöÂÖÖÈõªÊñπÂºèÔºåÁµÇÊ≠¢ÂÖÖÈõª" + Car(car_idx).AutoCharge.ToString)
-                                                Car(car_idx).To_AGV(6) = 0
-                                                Car(car_idx).cmd_idx += 1
-                                            End If
-
-                                            If Car(car_idx).device_status(9) = 2 Or Car(car_idx).device_status(8) = 2 Then
-                                                settext(Car(car_idx).device_no.ToString + "CHARGING  AGVÂÆåÊàêÂÖÖÈõªÂëΩ‰ª§")
-                                                Car(car_idx).To_AGV(6) = 0
-                                                Car(car_idx).cmd_idx += 1
-                                            End If
-                                        Case "CounterStart"
-                                            settext(Car(car_idx).device_no.ToString + ":Counter  " + Now().ToString)
-                                            Car(car_idx).To_AGV(6) = 50
-                                            If Car(car_idx).get_action = 50 And Car(car_idx).get_Err = 0 Then
-                                                Car(car_idx).cmd_idx += 1
-                                                Car(car_idx).Counter_timer = Now()
-                                            End If
-                                        Case "Waiting"
-                                            If (DateDiff("s", Car(car_idx).Counter_timer, Now) > 250) Then
-                                                Car(car_idx).To_AGV(6) = 0
-                                                Car(car_idx).cmd_idx += 1
-                                            End If
-                                        Case "FORCE_OUT"
-                                            settext("FORCE_OUT")
-                                            Car(car_idx).To_AGV(6) = &H11
-                                            If Car(car_idx).get_pin = 2 And Car(car_idx).get_action = &H11 And Car(car_idx).get_Err = 0 Then
-                                                Car(car_idx).To_AGV(6) = 0
-                                                Car(car_idx).cmd_idx += 1
-                                                Car(car_idx).RollData = "" 'ËªäÂ≠êÈô§Â∏≥
-                                                Query = "UPDATE `agv_list` SET `RollData` = '" + Car(car_idx).RollData + "' WHERE `AGVNo` = '" + Car(car_idx).device_no.ToString + "';"
-                                                sqlCommand.CommandText = Query
-                                                sqlCommand.ExecuteNonQuery()
-
-                                            End If
-                                        Case "TAKE_DOWN"
-                                            Dim fn_idx As Integer = 0
-                                            Dim ext_cmd_list() As String = Car(car_idx).ext_cmd.Split(",")
-
-                                            If (ext_cmd_list.Length = 2 Or ext_cmd_list.Length = 4) And IsNumeric(ext_cmd_list(fn_idx)) Then
-                                                Car(car_idx).To_AGV(6) = CInt(ext_cmd_list(fn_idx))
-                                                If Car(car_idx).get_lft_action = CInt(ext_cmd_list(fn_idx)) Then
-
-                                                    Car(car_idx).To_AGV(6) = 0
-                                                    Car(car_idx).cmd_idx += 1
-                                                End If
-                                            End If
-                                        Case "TAKE_UP"
-                                            Dim fn_idx As Integer = 0
-                                            Dim ext_cmd_list() As String = Car(car_idx).ext_cmd.Split(",")
-
-                                            If (ext_cmd_list.Length = 2 Or ext_cmd_list.Length = 4) And IsNumeric(ext_cmd_list(fn_idx)) Then
-                                                Car(car_idx).To_AGV(6) = CInt(ext_cmd_list(fn_idx)) + 1
-                                                If Car(car_idx).get_lft_action = CInt(ext_cmd_list(fn_idx)) + 1 Then
-                                                    Dim dbreader As MySqlDataReader
-                                                    Dim Buf_Type As String = ""
-                                                    Dim Buf_Layer As Integer = 0
-                                                    Dim ans As Integer = 0
-                                                    Query = "SELECT Buf_Type,Buf_Layer FROM `agv_buffer` where TagID=" + Car(car_idx).get_tagId().ToString
-                                                    sqlCommand.CommandText = Query
-                                                    dbreader = sqlCommand.ExecuteReader()
-
-                                                    If dbreader.Read Then
-                                                        Buf_Type = dbreader.Item(0)
-                                                        Buf_Layer = CInt(dbreader.Item(1))
-                                                        dbreader.Close()
-                                                        settext("Car" + Car(car_idx).device_no.ToString + "(" + Car(car_idx).get_tagId().ToString + "):" + Buf_Type + ":" + Buf_Layer.ToString)
-                                                        If Buf_Layer > 0 Then
-                                                            Query = " update `agv_list` set RollData='" + Buf_Type + "' "
-                                                            Query += " where AGVNo=" + Car(car_idx).device_no.ToString + ""
-                                                            sqlCommand.CommandText = Query
-                                                            ans = sqlCommand.ExecuteNonQuery()
-                                                            settext(Query + ":" + ans.ToString)
-                                                            Buf_Layer = Buf_Layer - 1
-
-                                                            If Buf_Layer = 0 Then
-                                                                Buf_Type = ""
-                                                            End If
-
-                                                            Query = "update `agv_buffer`  set Buf_Type='" + Buf_Type + "',Buf_Layer=" + Buf_Layer.ToString + ",LM_Time=now(),LM_User='AGVC_TAKE_UP' "
-                                                            Query += " where  TagID=" + Car(car_idx).get_tagId().ToString
-                                                            sqlCommand.CommandText = Query
-                                                            ans = sqlCommand.ExecuteNonQuery()
-                                                            settext(Query + ":" + ans.ToString)
-
-                                                        End If
-                                                    End If
-                                                    If dbreader.IsClosed = False Then
-                                                        dbreader.Close()
-                                                    End If
-                                                    Car(car_idx).To_AGV(6) = 0
-                                                    Car(car_idx).cmd_idx += 1
-                                                End If
-                                            End If
-                                        Case "ONCAR_CMD"
-                                            Dim fn_idx As Integer = 0
-                                            Dim ext_cmd_list() As String = Car(car_idx).ext_cmd.Split(",")
-
-                                            If ext_cmd_list.Length = 1 And IsNumeric(ext_cmd_list(fn_idx)) Then
-                                                Car(car_idx).To_AGV(6) = CInt(ext_cmd_list(fn_idx))
-                                                If Car(car_idx).get_lft_action = CInt(ext_cmd_list(fn_idx)) Then
-                                                    Car(car_idx).To_AGV(6) = 0
-                                                    Car(car_idx).cmd_idx += 1
-                                                End If
-                                            End If
-                                        Case "LFT_CTRL"
-                                            Dim ext_cmd As String = Car(car_idx).ext_cmd
-                                            If IsNumeric(ext_cmd) Then
-                                                Car(car_idx).To_AGV(6) = CInt(ext_cmd)
-                                                If Car(car_idx).get_lft_action = CInt(ext_cmd) Then
-                                                    Car(car_idx).To_AGV(6) = 0
-                                                    Car(car_idx).cmd_idx += 1
-                                                End If
-                                            End If
-                                        Case "PUT_UP"
-                                            Dim fn_idx As Integer = 1
-                                            Dim ext_cmd_list() As String = Car(car_idx).ext_cmd.Split(",")
-
-                                            If (ext_cmd_list.Length = 2 Or ext_cmd_list.Length = 4) And IsNumeric(ext_cmd_list(fn_idx)) Then
-                                                Car(car_idx).To_AGV(6) = CInt(ext_cmd_list(fn_idx)) + 1
-                                                If Car(car_idx).get_lft_action = CInt(ext_cmd_list(fn_idx)) + 1 Then
-                                                    Car(car_idx).To_AGV(6) = 0
-                                                    Car(car_idx).cmd_idx += 1
-                                                End If
-                                            End If
-                                        Case "PUT_DOWN"
-                                            Dim fn_idx As Integer = 1
-                                            Dim ext_cmd_list() As String = Car(car_idx).ext_cmd.Split(",")
-
-                                            If (ext_cmd_list.Length = 2 Or ext_cmd_list.Length = 4) And IsNumeric(ext_cmd_list(fn_idx)) Then
-                                                Car(car_idx).To_AGV(6) = CInt(ext_cmd_list(fn_idx))
-                                                If Car(car_idx).get_lft_action = ext_cmd_list(fn_idx) Then
-                                                    'ÈÅéÂ∏≥Âà∞buffer
-                                                    Query = "update `agv_buffer` A ,agv_list B  set A.Buf_Layer=if(B.RollData='pallet',A.Buf_Layer+1,1),A.Buf_Type=B.RollData ,A.LM_Time=now(),A.LM_User='AGVC_PUT_DOWN' "
-                                                    Query += " where  TagID=" + Car(car_idx).get_tagId().ToString + " and B.AGVNo=" + Car(car_idx).device_no.ToString
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-                                                    'Èô§Â∏≥
-                                                    Query = " update `agv_list` A  set A.RollData='' "
-                                                    Query += " where A.AGVNo=" + Car(car_idx).device_no.ToString
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-                                                    'Car(car_idx).cmd_Shelf_Car_No = 0
-                                                    Car(car_idx).To_AGV(6) = 0
-                                                    Car(car_idx).cmd_idx += 1
-                                                End If
-                                            End If
-                                        Case "LFT_DOWN1"
-                                            Car(car_idx).To_AGV(6) = 34
-                                            If Car(car_idx).get_lft_action = 34 Then
-                                                Car(car_idx).To_AGV(6) = 0
-                                                Car(car_idx).cmd_idx += 1
-                                            End If
-                                        Case "LFT_DOWN2"
-
-                                            Car(car_idx).To_AGV(6) = 30
-                                            If Car(car_idx).get_lft_action = 30 Then
-                                                Car(car_idx).To_AGV(6) = 0
-                                                Car(car_idx).cmd_idx += 1
-                                            End If
-                                        Case "CHECK_SHELF_LOAD_ON"
-                                            If Car(car_idx).get_shelf_loading = 1 Then
-                                                Car(car_idx).cmd_idx += 1
-                                            Else
-                                                Car(car_idx).To_AGV(20) = 106 ' ÁÑ°ËºâËç∑
-                                            End If
-                                        Case "CHECK_SHELF_LOAD_OFF"
-                                            If Car(car_idx).get_shelf_loading = 0 Then
-                                                Car(car_idx).cmd_idx += 1
-                                            Else
-                                                Car(car_idx).To_AGV(20) = 107 ' ÊúâËºâËç∑
-                                            End If
-                                        Case "FINSH"
-                                            Try
-                                                Query = "update  agv_cmd_history set End_TIme=now(),end_distance=" + Car(car_idx).get_distance.ToString + ",empty_time=" + Car(car_idx).empty_time.ToString + ",Load_time=" + Car(car_idx).Load_time.ToString + ",Error_time=" + Car(car_idx).Error_time.ToString + " where Cmdkey = " + Car(car_idx).cmd_sql_idx.ToString + " and Start_Time >'" + Now().AddHours(-2).ToString("yyyy-MM-dd HH:mm:ss") + "'"
-                                                sqlCommand.CommandText = Query
-                                                sqlCommand.ExecuteNonQuery()
-                                                Query = "delete from  agv_cmd_list where CmdKey =" + Car(car_idx).cmd_sql_idx.ToString
-                                                sqlCommand.CommandText = Query
-                                                sqlCommand.ExecuteNonQuery()
-                                                If Car(car_idx).get_Shelf_Car_No > 0 And Agvc_shelfcheck.Checked = True And Car(car_idx).Car_type = "PIN" Then
-                                                    Query = "update   `shelf_car` set LOCATION=" + Car(car_idx).get_tagId.ToString + ",updateTime=now(),updateName='FINSH_GET' where Shelf_Car_No=" + Car(car_idx).get_Shelf_Car_No.ToString
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-                                                    Query = "insert into shelf_car_history select * from shelf_car where shelf_car_no =" + Car(car_idx).get_Shelf_Car_No.ToString
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-                                                ElseIf Car(car_idx).cmd_Shelf_Car_No > 0 And Car(car_idx).Car_type = "PIN" Then
-                                                    Query = "update   `shelf_car` set LOCATION=" + Car(car_idx).get_tagId.ToString + ",updateTime=now(),updateName='FINSH_CMD' where Shelf_Car_No=" + Car(car_idx).cmd_Shelf_Car_No.ToString
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-                                                    Query = "insert into shelf_car_history select * from shelf_car where shelf_car_no =" + Car(car_idx).cmd_Shelf_Car_No.ToString
-                                                    sqlCommand.CommandText = Query
-                                                    sqlCommand.ExecuteNonQuery()
-                                                End If
-                                            Catch ex As Exception
-                                                settext("FINSH SQL ERROR:" + Query)
-                                            End Try
-                                            For ii As Integer = 4 To 20
-                                                Car(car_idx).To_AGV(ii) = 0
-                                            Next
-                                            Car(car_idx).cmd_sql_idx = 0
-                                            Car(car_idx).Cmd_From = 0
-                                            Car(car_idx).Cmd_To = 0
-                                            Car(car_idx).RequestTime = ""
-                                            Car(car_idx).Requestor = ""
-                                            Car(car_idx).cmd_Shelf_Car_No = 0
-                                            Car(car_idx).cmd_Shelf_Car_Type = ""
-                                            Car(car_idx).cmd_Shelf_Car_size = 0
-                                            Car(car_idx).cmd_idx = -2 'ÊÅ¢Âæ©ÂèØÊé•ÂèóÂëΩ‰ª§ÁãÄÊÖã
-                                            Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
-                                        Case "FINSH01"
-                                            Try
-                                                Query = "update  agv_cmd_history set End_TIme=now(),end_distance=" + Car(car_idx).get_distance.ToString + ",empty_time=" + Car(car_idx).empty_time.ToString + ",Load_time=" + Car(car_idx).Load_time.ToString + ",Error_time=" + Car(car_idx).Error_time.ToString + " where Cmdkey = " + Car(car_idx).cmd_sql_idx.ToString + " and Start_Time >'" + Now().AddHours(-2).ToString("yyyy-MM-dd HH:mm:ss") + "'"
-                                                sqlCommand.CommandText = Query
-                                                sqlCommand.ExecuteNonQuery()
-                                                Query = "delete from  agv_cmd_list where CmdKey =" + Car(car_idx).cmd_sql_idx.ToString
-                                                sqlCommand.CommandText = Query
-                                                sqlCommand.ExecuteNonQuery()
-                                            Catch ex As Exception
-                                                settext("FINSH01 SQL ERROR" + Query)
-                                            End Try
-                                            For ii As Integer = 4 To 20
-                                                Car(car_idx).To_AGV(ii) = 0
-                                            Next
-                                            Car(car_idx).cmd_sql_idx = 0
-                                            Car(car_idx).Cmd_From = 0
-                                            Car(car_idx).Cmd_To = 0
-                                            Car(car_idx).RequestTime = ""
-                                            Car(car_idx).Requestor = ""
-                                            Car(car_idx).cmd_Shelf_Car_No = 0
-                                            Car(car_idx).cmd_Shelf_Car_Type = ""
-                                            Car(car_idx).cmd_Shelf_Car_size = 0
-                                            Car(car_idx).cmd_idx = -2 'ÊÅ¢Âæ©ÂèØÊé•ÂèóÂëΩ‰ª§ÁãÄÊÖã
-                                            Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
-                                        Case "GoingNext"
-                                            'Áî®ÊñºÊêúÂ∞ã‰∏ãÂÄãÈªû‰Ωç
-                                            If Car(car_idx).step_i = 999 And Car(car_idx).get_status = 0 Then
-                                                Car(car_idx).cmd_idx += 1
-                                            End If
-                                        Case "NEXT"
-                                            'Áî®ÊñºÊêúÂ∞ã‰∏ãÂÄãÈªû‰Ωç
-                                            ' If Car(car_idx).step_i = 999 And Car(car_idx).get_status = 0 Then
-                                            Car(car_idx).cmd_idx += 1
-                                            ' End If
-                                        Case "NEXT2"
-                                            'Áî®ÊñºÊêúÂ∞ã‰∏ãÂÄãÈªû‰Ωç
-                                            ' If Car(car_idx).step_i = 999 And Car(car_idx).get_status = 0 Then
-                                            Car(car_idx).cmd_idx += 2
-                                        Case "Going"
-
-                                            If Car(car_idx).get_tagId = Car(car_idx).To_pos Then
-                                                Car(car_idx).cmd_idx += 1
-                                                Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
-
-                                            ElseIf (Car(car_idx).get_status = 0 Or Car(car_idx).get_status = 2) And Car(car_idx).get_Err = 0 Then
-                                                'Âà§Êñ∑ÊôÇÈñì
-                                                Dim wait_setting As Integer = 1
-                                                If Car(car_idx).get_tagId = Car(car_idx).To_temp_pos Then
-                                                    Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
-                                                    wait_setting = 2
-                                                End If
-                                                Car(car_idx).Wait_count += 1
-                                                If Car(car_idx).Wait_count > wait_setting Then
-                                                    Car(car_idx).cmd_idx -= 1
-                                                    Car(car_idx).sflag = 0
-                                                End If
-                                                settext("Wait_count:" + Car(car_idx).Wait_count.ToString)
-                                                settext("get_tagId:" + Car(car_idx).get_tagId.ToString)
-                                                settext("To_pos:" + Car(car_idx).To_pos.ToString)
-                                                settext("To_temp_pos:" + Car(car_idx).To_temp_pos.ToString)
-                                            ElseIf Car(car_idx).get_status = 4 Then
-                                                Car(car_idx).Wait_count = 0
-                                            End If
-                                            If Car(car_idx).subcmd.IndexOf(Car(car_idx).get_tagId.ToString + ",") > -1 Then
-                                                Car(car_idx).subcmd = Car(car_idx).subcmd.Remove(0, Car(car_idx).subcmd.IndexOf(Car(car_idx).get_tagId.ToString + ","))
-                                            End If
-                                        Case "GoingEmpty"
-                                            'Âà§Êñ∑Âá∫ÁôºÁãÄÊÖã Ôºå‰∏çÂèØ‰ª•ÊúâËºâ ‰πü‰∏çÂèØ‰ª•È†ÇPIN
-                                            If Car(car_idx).get_tagId = Car(car_idx).To_pos Then
-                                                Car(car_idx).cmd_idx += 1
-                                                Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
-                                            ElseIf Car(car_idx).get_tagId = Car(car_idx).To_temp_pos Then
-                                                Car(car_idx).cmd_idx -= 1
-                                            ElseIf (Car(car_idx).get_status = 0 Or Car(car_idx).get_status = 2) And Car(car_idx).get_Err = 0 Then
-                                                'Âà§Êñ∑ÊôÇÈñì
-                                                Car(car_idx).Wait_count += 1
-                                                If Car(car_idx).Wait_count > 1 Then
-                                                    Car(car_idx).cmd_idx -= 1
-                                                End If
-                                                settext("Wait_count:" + Car(car_idx).Wait_count.ToString)
-                                                settext("get_tagId:" + Car(car_idx).get_tagId.ToString)
-                                                settext("To_pos:" + Car(car_idx).To_pos.ToString)
-                                                settext("To_temp_pos:" + Car(car_idx).To_temp_pos.ToString)
-
-                                            ElseIf Car(car_idx).get_status = 4 Then
-                                                Car(car_idx).Wait_count = 0
-                                            End If
-                                            If Car(car_idx).subcmd.IndexOf(Car(car_idx).get_tagId.ToString + ",") > -1 Then
-                                                Car(car_idx).subcmd = Car(car_idx).subcmd.Remove(0, Car(car_idx).subcmd.IndexOf(Car(car_idx).get_tagId.ToString + ","))
-                                            End If
-                                        Case "Going_Check"
-                                            If Car(car_idx).get_tagId = Car(car_idx).To_pos Then
-                                                'Âà∞ÈÅîÁõÆÁöÑÔºåË∑≥Âà∞‰∏ã‰∏ÄÂÄã
-                                                Car(car_idx).cmd_idx += 1
-                                                Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
-                                                Car(car_idx).To_pos = 0
-
-                                            ElseIf (Car(car_idx).get_status = 0 Or Car(car_idx).get_status = 2) And Car(car_idx).get_Err = 0 Then
-                                                'Âà§Êñ∑ÊôÇÈñì
-                                                'Âà§Êñ∑ÊôÇÈñì
-                                                Dim wait_setting As Integer = 1
-                                                If Car(car_idx).get_tagId = Car(car_idx).To_temp_pos Then
-                                                    Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
-                                                    wait_setting = 1
-                                                End If
-                                                Car(car_idx).Wait_count += 1
-                                                If Car(car_idx).Wait_count > wait_setting Then
-                                                    Car(car_idx).cmd_idx -= 1
-                                                    Car(car_idx).sflag = 0
-                                                End If
-                                                settext(Car(car_idx).device_no.ToString + ":Wait_count:" + Car(car_idx).Wait_count.ToString)
-                                                settext(Car(car_idx).device_no.ToString + ":get_tagId:" + Car(car_idx).get_tagId.ToString)
-                                                settext(Car(car_idx).device_no.ToString + ":To_pos:" + Car(car_idx).To_pos.ToString)
-                                                settext(Car(car_idx).device_no.ToString + ":To_temp_pos:" + Car(car_idx).To_temp_pos.ToString)
-                                            ElseIf DateDiff("s", Car(car_idx).Run_time, Now) > 240 And (Car(car_idx).get_tagId = Car(car_idx).from_pos Or Car(car_idx).get_tagId = Car(car_idx).from_pos + 1) Then
-                                                ' Ë∂ÖÈÅé40Áßí(Êú™ÂâçÈÄ≤Âà∞‰∏ãÂÄãÈªû‰Ωç)
-                                                'Car(car_idx).cmd_idx = -2
-                                                'Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
-                                                'Car(car_idx).To_AGV(20) = 102 'Ëµ∞Ë°åË∂ÖÊôÇ
-
-                                            ElseIf Car(car_idx).get_status = 4 Then
-                                                Car(car_idx).Wait_count = 0
-                                            End If
-
-
-                                            If Car(car_idx).subcmd.IndexOf(Car(car_idx).get_tagId.ToString + ",") > -1 Then
-                                                Car(car_idx).subcmd = Car(car_idx).subcmd.Remove(0, Car(car_idx).subcmd.IndexOf(Car(car_idx).get_tagId.ToString + ","))
-                                            End If
-
-                                        Case Else
-                                            'Âü∑Ë°åË∑ØÂæëÂëΩ‰ª§
-                                            'Dim From_to_ary() As String
-                                            ' Dim path_str As String
-
-                                            Dim R_subcmd As String = ""
-                                            If IsNumeric(Car(car_idx).cmd_list(Car(car_idx).cmd_idx)) Then
-
-                                                Car(car_idx).from_pos = Car(car_idx).get_tagId
-                                                Car(car_idx).To_pos = CInt(Car(car_idx).cmd_list(Car(car_idx).cmd_idx))
-                                                Car(car_idx).sflag = 0
-                                                If Car(car_idx).from_pos = Car(car_idx).To_pos Then
-                                                    Car(car_idx).cmd_idx += 1
-                                                Else
-                                                    R_subcmd = Send2AGV(car_idx, 1)
-                                                    If Not R_subcmd = "" And Not R_subcmd = Car(car_idx).get_tagId.ToString Then
-                                                        Car(car_idx).cmd_idx += 1
-                                                    Else
-                                                        settext(Car(car_idx).device_no.ToString + ":ÁÑ°È†êÁ¥ÑË∑ØÂæë", True, Car(car_idx).device_no)
-                                                    End If
-
-                                                End If
-                                            Else
-                                                settext(Car(car_idx).cmd_list(Car(car_idx).cmd_idx) + ":ÈùûÊï∏Â≠ó", True, Car(car_idx).device_no)
-                                                Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "FINSH"
-                                            End If
-
-                                    End Select
-                                    '-----------------
-                                    If Car(car_idx).cmd_idx >= 0 Then
-                                        Query = "update agv_cmd_list set step_i=" + Car(car_idx).cmd_idx.ToString + ",CMD_status='" + Car(car_idx).cmd_list(Car(car_idx).cmd_idx).ToString + "',SubCmd='" + Car(car_idx).subcmd + "',cmd_cnt='" + Car(car_idx).main_subcmd.Split(",").Length.ToString + "' where CmdKey =" + Car(car_idx).cmd_sql_idx.ToString
-                                        sqlCommand.CommandText = Query
-                                        sqlCommand.ExecuteNonQuery()
-                                    End If
-
-                                Else
-                                    'Ë°®ÂàóÊâæ‰∏çÂà∞SQL
-                                    Query = "update  agv_cmd_history set Requestor=concat(Requestor,'(X)'),End_TIme=now(),end_distance=" + Car(car_idx).get_distance.ToString + ",empty_time=" + Car(car_idx).empty_time.ToString + ",Load_time=" + Car(car_idx).Load_time.ToString + ",Error_time=" + Car(car_idx).Error_time.ToString + " where Cmdkey = " + Car(car_idx).cmd_sql_idx.ToString + " and Start_Time >'" + Now().AddHours(-2).ToString("yyyy-MM-dd HH:mm:ss") + "'"
+                        ElseIf Not select_idx = -1 Then
+                            Car(car_idx).cmd_sql_idx = CInt(Me.ListView1.Items(select_idx).SubItems(0).Text)
+                            Car(car_idx).Cmd_From = CInt(Me.ListView1.Items(select_idx).SubItems(2).Text)
+                            Car(car_idx).Cmd_To = CInt(Me.ListView1.Items(select_idx).SubItems(3).Text)
+                            Car(car_idx).RequestTime = (Me.ListView1.Items(select_idx).SubItems(6).Text)
+                            Car(car_idx).Requestor = (Me.ListView1.Items(select_idx).SubItems(7).Text)
+                            Car(car_idx).cmd_Shelf_Car_No = CInt(Me.ListView1.Items(select_idx).SubItems(8).Text)
+                            Car(car_idx).cmd_Shelf_Car_Type = Me.ListView1.Items(select_idx).SubItems(9).Text
+                            Car(car_idx).cmd_Shelf_Car_size = Me.ListView1.Items(select_idx).SubItems(10).Text
+                            Car(car_idx).Cmd_RollData = Me.ListView1.Items(select_idx).SubItems(11).Text
+                            Car(car_idx).ext_cmd = Me.ListView1.Items(select_idx).SubItems(12).Text
+                            Car(car_idx).CommandID = Me.ListView1.Items(select_idx).SubItems(13).Text
+                            comQGWrapper.EventReportSendOb(GEM.EVENT_CraneActive, Car(car_idx).CommandID + "," + comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString)
+                            Car(car_idx).Sql2Cmdlist()
+                            'øÔæ‹©R•O
+                            If Car(car_idx).cmd_idx = 0 Then
+                                '¨ˆø˝∂}©l∞ı¶ÊÆ…∂°
+                                Query = ""
+                                Try
+                                    Query = "INSERT INTO `agv_cmd_history` (`CmdKey`, `AGVNo`,`CmdFrom`, `CmdTo`, `RequestTime`, `Requestor`, `Start_Time`,Shelf_Car_No,Shelf_Car_type,Shelf_Car_Size,start_distance,ext_cmd,RollData,McsCmdKey,cmdstart) "
+                                    Query += "VALUES ('" + Car(car_idx).cmd_sql_idx.ToString + "','" + Car(car_idx).device_no.ToString + "','" + Car(car_idx).Cmd_From.ToString + "', '" + Car(car_idx).Cmd_To.ToString + "', '" + Car(car_idx).RequestTime + "', '" + Car(car_idx).Requestor + "',now()," + Car(car_idx).cmd_Shelf_Car_No.ToString + ",'" + Car(car_idx).cmd_Shelf_Car_Type + _
+                                        "','" + Car(car_idx).cmd_Shelf_Car_size + "'," + Car(car_idx).get_distance.ToString + ",'" + Car(car_idx).ext_cmd + "','" + Car(car_idx).Cmd_RollData + "','" + Car(car_idx).CommandID + "'," + Car(car_idx).get_tagId.ToString + ");"
                                     sqlCommand.CommandText = Query
                                     sqlCommand.ExecuteNonQuery()
-                                    Car(car_idx).cmd_idx = -2 'ÈáçÁΩÆÂëΩ‰ª§
-                                    'ÂÖàÈÅ∏ÊìáÂëΩ‰ª§
-                                    Car(car_idx).cmd_sql_idx = 0
-                                    Car(car_idx).Cmd_From = 0
-                                    Car(car_idx).Cmd_To = 0
-                                    Car(car_idx).RequestTime = ""
-                                    Car(car_idx).Requestor = ""
-                                    Car(car_idx).cmd_Shelf_Car_No = 0
-                                    Car(car_idx).cmd_Shelf_Car_Type = ""
-                                    Car(car_idx).cmd_Shelf_Car_size = ""
-                                    Car(car_idx).Cmd_RollData = ""
-                                    'Car(car_idx).To_AGV(20) = 0
-                                    For ii As Integer = 4 To 20
-                                        Car(car_idx).To_AGV(ii) = 0
-                                    Next
-                                End If
-
-                            End If 'ÈÅ∏ÊìáÂëΩ‰ª§ÁµêÊùü Car(car_idx).cmd_idx = -2
-                        Else
-                            'Èõ¢Á∑öÊôÇÈ†àÂà§Êñ∑ÁöÑÁ®ãÂºè
-                            If Not Car(car_idx).cmd_idx = -2 Then
-                                If Car(car_idx).get_status = 4 Then
-                                    Car(car_idx).Wait_count = 0
-                                End If
-                                Car(car_idx).Wait_count = 0
-
-                                If Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "Going_Check" And Car(car_idx).get_pin = 10 And (Car(car_idx).Car_type = "PIN" Or Car(car_idx).Car_type = "FORK") Then
-                                    'Âà§Êñ∑ÁõÆÂâç‰ΩçÁΩÆ‰∏çÁ≠âÊñºÂá∫ÁôºÊàñÊòØÂá∫ÁôºÂú∞-1
-                                    If Car(car_idx).get_loading = 3 Then
-                                        Car(car_idx).Loading_err_cnt = 0
-                                    End If
-                                    If Car(car_idx).get_tagId = Car(car_idx).Cmd_From + 2 Then
-                                        settext(Car(car_idx).device_no.ToString + ":Âà§Êñ∑" + ALL_Loading_check.Checked.ToString + Loading_Check.Checked.ToString + "," + Car(car_idx).get_pin.ToString + "," + Car(car_idx).get_loading.ToString)
-                                    End If
-
-                                    Dim a As Integer = Car(car_idx).get_Shelf_Car_No
-                                    If Not (Car(car_idx).get_tagId = Car(car_idx).from_pos Or Car(car_idx).get_tagId = Car(car_idx).from_pos - 1) Then
-
-
-
-                                        If (Not Car(car_idx).device_status(17) = Car(car_idx).cmd_Shelf_Car_No) And Car(car_idx).cmd_Shelf_Car_No > 0 And Not Car(car_idx).device_no = 6 And Agvc_shelfcheck.Checked = True And Not Car(car_idx).Car_type = "FORK" Then
-                                            'Car(car_idx).cmd_idx = -2
-                                            settext(Car(car_idx).device_no.ToString + ":Â∏≥Êñô‰∏çÁ¨¶")
-                                            Car(car_idx).To_AGV(20) = 1000 'È†êÊØîÂ∞ç
-
-                                        ElseIf Car(car_idx).get_loading < 3 And Loading_Check.Checked = True And ALL_Loading_check.Checked = True And Car(car_idx).get_pin = 10 And Not Car(car_idx).Car_type = "FORK" Then
-                                            'ÂÖ®ÊôÇÁõ£Êéß
-                                            Car(car_idx).Loading_err_cnt += 1
-                                            If Car(car_idx).Loading_err_cnt > 3 Then
-                                                settext(Car(car_idx).device_no.ToString + ":Êú™ÂèñÂà∞Êû∂Âè∞Áï∞Â∏∏")
-                                                If Car(car_idx).get_loading = 1 Then
-                                                    Car(car_idx).To_AGV(20) = 1001 '  ÂâçÊÑüÊáâÊú™ÂèñÂà∞Êû∂Âè∞
-                                                ElseIf Car(car_idx).get_loading = 2 Then
-                                                    Car(car_idx).To_AGV(20) = 1002 '  ÂæåÊÑüÊáâÊú™ÂèñÂà∞Êû∂Âè∞
-                                                Else
-                                                    Car(car_idx).To_AGV(20) = 100 '  Êú™ÂèñÂà∞Êû∂Âè∞
-                                                End If
-
-                                            End If
-                                        ElseIf Car(car_idx).get_loading < 3 And Loading_Check.Checked = True And Car(car_idx).get_pin = 10 And Car(car_idx).get_tagId = Car(car_idx).Cmd_From + 2 And Not Car(car_idx).Car_type = "FORK" Then
-                                            'ÈùûÂÖ®ÊôÇÁõ£Êéß
-                                            Car(car_idx).Loading_err_cnt += 1
-                                            settext(Car(car_idx).device_no.ToString + ":Êú™ÂèñÂà∞Êû∂Âè∞Áï∞Â∏∏")
-                                            If Car(car_idx).get_loading = 1 Then
-                                                Car(car_idx).To_AGV(20) = 1001 '  Êú™ÂèñÂà∞Êû∂Âè∞
-                                            ElseIf Car(car_idx).get_loading = 2 Then
-                                                Car(car_idx).To_AGV(20) = 1002 '  Êú™ÂèñÂà∞Êû∂Âè∞
-                                            Else
-                                                Car(car_idx).To_AGV(20) = 100 '  Êú™ÂèñÂà∞Êû∂Âè∞
-                                            End If
-
-                                        ElseIf (Not Car(car_idx).get_Shelf_Car_No = Car(car_idx).cmd_Shelf_Car_No) And Car(car_idx).cmd_Shelf_Car_No > 0 And Not Car(car_idx).device_no = 6 And Agvc_shelfcheck.Checked = True And Not Car(car_idx).Car_type = "FORK" Then
-                                            'Car(car_idx).cmd_idx = -2
-                                            settext(Car(car_idx).device_no.ToString + ":Â∏≥Êñô‰∏çÁ¨¶")
-                                            Car(car_idx).To_AGV(20) = 101 ' Â∏≥Êñô‰∏çÁ¨¶
-                                        End If
-
-                                        If Not Car(car_idx).get_tagId = Car(car_idx).To_pos + 1 And Not Car(car_idx).get_tagId = Car(car_idx).To_pos + 2 And Not Car(car_idx).get_tagId = Car(car_idx).To_pos + 3 And Not Car(car_idx).get_tagId = Car(car_idx).To_pos Then
-                                            For ii As Integer = 0 To shelf_car_total_no
-                                                If shelf_car(ii).LOCATION = Car(car_idx).To_pos And shelf_car(ii).LOCATION Mod 10 = 0 Then
-                                                    ' Car(car_idx).cmd_idx = -2
-
-                                                    Car(car_idx).To_AGV(20) = 103 ' ÁõÆÁöÑÁ´ØÊúâÊû∂Âè∞
-                                                    settext(Car(car_idx).device_no.ToString + ":ÁõÆÁöÑÁ´ØÊúâÊû∂Âè∞To_pos " + Car(car_idx).To_pos.ToString + "shelf_car" + shelf_car(ii).Shelf_Car_No.ToString + "LOCATION" + shelf_car(ii).LOCATION.ToString)
-
-                                                End If
-                                            Next
-
-                                        End If
-
-                                    End If
-                                ElseIf Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "Going_Check" And Loading_Check.Checked = True And Car(car_idx).get_loading < 3 Then
-                                    Car(car_idx).To_AGV(20) = 100 ' Êú™ÂèñÂà∞Êû∂Âè∞
-
-                                ElseIf Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "GoingEmpty" And Car(car_idx).get_tagId Mod 10 > 3 And (Car(car_idx).get_loading = 1 Or Car(car_idx).get_loading = 2 Or Car(car_idx).get_loading = 3 Or Car(car_idx).get_pin = 10) Then
-                                    Car(car_idx).To_AGV(20) = 112 'Âú®Â∏≠Áï∞Â∏∏
-                                ElseIf (Car(car_idx).Car_type = "LFT" Or Car(car_idx).Car_type = "FORK") And Car(car_idx).path_error_count >= 3 Then
-                                    Car(car_idx).To_AGV(20) = 114 'Âú∞ÂúñÈåØË™§
-                                ElseIf Car(car_idx).Car_type = "POWER2" And Car(car_idx).get_pin = 10 And Car(car_idx).get_tagId Mod 10 > 2 And Car(car_idx).cmd_list(Car(car_idx).cmd_idx).StartsWith("Going") Then
-                                    Car(car_idx).To_AGV(20) = 112 'Âú®Â∏≠Áï∞Â∏∏
-                                End If
-                                If Car(car_idx).get_Err = 100 And Car(car_idx).get_loading = 3 Then
-                                    'Ëá™ÂãïÂæ©Ê≠∏
-                                    Car(car_idx).To_AGV(20) = 0
-
-                                End If
-
-                                '  settext(Car(car_idx).device_no.ToString + ":ËªäÂ≠êÁãÄÊÖã‰∏çÁ≠âÊñº4ÔºåÁÑ°ÈáçÊñ∞Ë¶èÂäÉ")
-                                If Car(car_idx).get_status = 12 Or Car(car_idx).get_status = 8 Then
-                                    Car(car_idx).rate_point = Car(car_idx).get_tagId()
-                                    settext(Car(car_idx).device_no.ToString + ":Ë®≠ÂÆöÊóãËΩâÈªû‰Ωç" + Car(car_idx).rate_point.ToString + "ÔºåÁÑ°ÈáçÊñ∞Ë¶èÂäÉ")
-                                End If
-
-
-                                If Car(car_idx).sflag = 1 Then
-                                    ' settext(Car(car_idx).device_no.ToString + ":ÈÄÄÈÅø‰∏≠ÔºåÁÑ°ÈáçÊñ∞Ë¶èÂäÉ")
-                                ElseIf Not Car(car_idx).cmd_list(Car(car_idx).cmd_idx).StartsWith("Going") Then
-                                    '  settext(Car(car_idx).device_no.ToString + ":ÁãÄÊÖã->" + Car(car_idx).cmd_list(Car(car_idx).cmd_idx) + "ÔºåÁÑ°ÈáçÊñ∞Ë¶èÂäÉ")
-                                ElseIf Car(car_idx).subcmd.Split(",").Length > ReMapLen Then
-                                    ' settext(Car(car_idx).device_no.ToString + ":Èï∑Â∫¶Â§ßÊñº3ÔºåÁÑ°ÈáçÊñ∞Ë¶èÂäÉ")
-                                ElseIf Car(car_idx).subcmd.Split(",").Length <= 2 Then
-                                    '  settext(Car(car_idx).device_no.ToString + ":Èï∑Â∫¶Â∞èÊñº2ÔºåÁÑ°ÈáçÊñ∞Ë¶èÂäÉ")
-
-                                ElseIf Not Car(car_idx).get_status = 4 Then
-                                    '  settext(Car(car_idx).device_no.ToString + ":ËªäÂ≠êÁãÄÊÖã‰∏çÁ≠âÊñº4ÔºåÁÑ°ÈáçÊñ∞Ë¶èÂäÉ")
-                                    If Car(car_idx).get_status = 12 Or Car(car_idx).get_status = 8 Then
-                                        Car(car_idx).rate_point = Car(car_idx).get_tagId()
-                                        settext(Car(car_idx).device_no.ToString + ":Ë®≠ÂÆöÊóãËΩâÈªû‰Ωç" + Car(car_idx).rate_point.ToString + "ÔºåÁÑ°ÈáçÊñ∞Ë¶èÂäÉ")
-                                    End If
-                                ElseIf Car(car_idx).get_tagId = Car(car_idx).To_temp_pos Then
-                                    '  settext(Car(car_idx).device_no.ToString + ":ËªäÂ≠êÂà∞ÈÅîÊö´ÊôÇÂÅúËªäÈªû")
-                                ElseIf Car(car_idx).subcmd.EndsWith(Car(car_idx).To_pos.ToString) Then
-                                    '   settext(Car(car_idx).device_no.ToString + ":Â∑≤Ë¶èÂäÉÂà∞ÁõÆÁöÑÂú∞" + Car(car_idx).subcmd + "ÔºåÁÑ°ÈáçÊñ∞Ë¶èÂäÉ")
-                                ElseIf Car(car_idx).step_i < 999 Then
-                                    settext(Car(car_idx).device_no.ToString + ":Âú∞ÂúñÊú™ÂÇ≥ÈÄÅÂÆåÁï¢ÔºåÁÑ°ÈáçÊñ∞Ë¶èÂäÉ")
-                                ElseIf Car(car_idx).rate_point = Car(car_idx).get_tagId() Then
-                                    settext(Car(car_idx).device_no.ToString + ":ÁõÆÂâçÊóãËΩâ‰∏≠" + Car(car_idx).subcmd + "ÔºåÁÑ°ÈáçÊñ∞Ë¶èÂäÉ")
-                                Else
-                                    Dim R_subcmd As String = Send2AGV(car_idx, 11)
-                                    settext(Car(car_idx).device_no.ToString + ":ÈáçÊñ∞Ë¶èÂäÉË∑ØÂæë" + R_subcmd, True, Car(car_idx).device_no)
-                                End If
-                                'If Car(car_idx).step_i = 999 And Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "KeepManual" Then
-                                '    Car(car_idx).cmd_idx += 1
-                                'End If
+                                    Query = "update agv_cmd_list set CMD_Status='" + Car(car_idx).cmd_list(Car(car_idx).cmd_idx) + "',Pri_Wt=999 where CmdKey =" + Car(car_idx).cmd_sql_idx.ToString
+                                    sqlCommand.CommandText = Query
+                                    sqlCommand.ExecuteNonQuery()
+                                Catch ex As Exception
+                                    settext(Query + ":" + ex.Message)
+                                End Try
                             End If
-                            'Èõ¢Á∑öÁßªÈô§TAGIDÁöÑÂëΩ‰ª§
-                            Try
 
-
-                                For i = 0 To Me.ListView1.Items.Count - 1
-                                    If Not Me.ListView1.Items(i).SubItems(5).Text.StartsWith("ERROR") And CInt(Me.ListView1.Items(i).SubItems(1).Text) = Car(car_idx).device_no And CInt(Me.ListView1.Items(i).SubItems(3).Text) = -2 Then
-                                        Car(car_idx).subcmd = "1"
-                                        Car(car_idx).force_tagId(1) 'Âª∫Á´ãÈõ¢Á∑ö
-
-                                        Query = "delete from  agv_cmd_list where CmdKey =" + CInt(Me.ListView1.Items(i).SubItems(0).Text).ToString
-                                        sqlCommand.CommandText = Query
-                                        sqlCommand.ExecuteNonQuery()
-                                        Query = "update  agv_cmd_history set End_TIme=now() where Cmdkey = " + CInt(Me.ListView1.Items(i).SubItems(0).Text).ToString
-                                        sqlCommand.CommandText = Query
-                                        sqlCommand.ExecuteNonQuery()
-                                        Car(car_idx).cmd_sql_idx = 0
-                                        Car(car_idx).cmd_idx = -2 'ÊÅ¢Âæ©ÂèØÊé•ÂèóÂëΩ‰ª§ÁãÄÊÖã
-
-                                    End If
-                                Next
-                            Catch ex As Exception
-                                Car(car_idx).cmd_sql_idx = 0
-                                Car(car_idx).cmd_idx = -2 'ÊÅ¢Âæ©ÂèØÊé•ÂèóÂëΩ‰ª§ÁãÄÊÖã
-                            End Try
-
-                            Dim check_idx As Boolean = Check_SQL_idx(Car(car_idx).cmd_sql_idx)
-                            If Car(car_idx).To_AGV(20) >= 100 And Car(car_idx).To_AGV(20) < 1000 And Not (Car(car_idx).To_AGV(20) = 105 And (Car(car_idx).get_Volt < Car(car_idx).Chrage_volt Or Car(car_idx).device_status(20) = 8)) And check_idx = False Then
-                                'ÈõªÂ£ìÊÅ¢Âæ©
-                                Car(car_idx).cmd_idx = -2 'ÈáçÁΩÆÂëΩ‰ª§
-                                Car(car_idx).To_AGV(20) = 0
-                            End If
-                            '
                         End If
 
-                        'ÈõªÊ±†1 ÁãÄÊÖãÁï∞Â∏∏
-                        If Car(car_idx).BMS1(16) > 0 And BMSinfoCheck(Car(car_idx).BMS1) Then
-                            If (BmsAlertIdx And Car(car_idx).BMS1(16)) > 0 Then
-                                Car(car_idx).To_AGV(20) = 30000 + InttoBitidx(Car(car_idx).BMS1(16))
-                                settext("AGV" + Car(car_idx).device_no.ToString + "bmsErr:" + int2str(Car(car_idx).BMS1, 0, 50))
-                            ElseIf (BmsWarmIdx And Car(car_idx).BMS1(16)) > 0 Then
-                                'Ë≠¶Â†±ËôïÁêÜÊ©üÂà∂
-                                'ÈéñËªä->Ê¥æÂà∞ÂÖÖÈõªÁ´ô
+                    End If
 
-                                Dim chargerlist(0) As String
-                                chargerlist(0) = Car(car_idx).Recharge_Point
-                                For change_i As Integer = 0 To chargerlist.Length - 1
-                                    Dim flag As Boolean = False
-                                    'Âà§Êñ∑ÂÖÖÈõªÁ´ôÊúâÊ≤íÊúâËªäÂ≠êÂÖÖÈõª
-                                    For j As Integer = 0 To Me.ListView1.Items.Count - 1
-                                        If (Me.ListView1.Items(j).SubItems(2).Text) = 4 And Me.ListView1.Items(j).SubItems(3).Text = chargerlist(change_i) Then
-                                            flag = True
-                                        End If
-                                    Next
-                                    If flag = False Then
-                                        'ÂÖÖÈõªÁ´ôIDLE
-                                        If Send_CMD(Car(car_idx).device_no, 1, chargerlist(change_i)) Then
-                                            Exit For
-                                        End If
-                                    End If
-                                Next
+                    If Not Car(car_idx).cmd_idx = -2 Then '®S¶≥´›∞ı¶Ê©R•O
+                        ' ∂}©l∞ı¶Ê©R•O
+                        'ΩTª{©R•O•º≥QßR∞£
+                        Dim check_idx As Boolean = Check_SQL_idx(Car(car_idx).cmd_sql_idx)
+                            settext(Car(car_idx).device_no.ToString + ":ChSQL:" + check_idx.ToString + ":" + Car(car_idx).cmd_sql_idx.ToString + ":" + Car(car_idx).cmd_list(Car(car_idx).cmd_idx).ToString)
+                        ' If check_idx Or (My.Settings.chrage_flag And Car(car_idx).Cmd_To = Car(car_idx).Chrage_Point) Then
+                        '-----------------
+                        If (DateDiff("s", Car(car_idx).Pre_TagID_time, Now) > AgvTimeoutVal) Then
+                            Car(car_idx).To_AGV(20) = 115 'πÔ´œTimeOut
 
-                            End If
                         End If
-
-
-
-
-                        If Car(car_idx).get_auto = 0 And Car(car_idx).get_Err = 0 Then
-                            Dim bms1check, bms2check As Integer
-                            If BMSinfoCheck(Car(car_idx).BMS1) Then
-                                bms1check = Car(car_idx).CheckBms(Car(car_idx).BMS1, Car(car_idx).BMSAlarm1)
-                                'ÈõªÊ±†1  BMSÁ°¨È´îÁï∞Â∏∏
-                                If Car(car_idx).BMS1(17) >= 64 And BMSinfoCheck(Car(car_idx).BMS1) Then
-                                    Car(car_idx).To_AGV(20) = 30016 + InttoBitidx(Car(car_idx).BMS1(17))
-                                End If
-                                If Car(car_idx).BMSAlarm1(17) > 600 Then
-                                    Car(car_idx).To_AGV(20) = 30065 'Ê≠£Â∏∏ÈÄ£Á∑ö‰∏îÂøÉË∑≥Áï∞Â∏∏
-                                End If
-                                If Car(car_idx).BMSAlarm1(17) = 0 Then
-                                    If bms1check > 0 Then
-                                        If (BmsAlertIdx And bms1check) > 0 Then
-                                            Car(car_idx).To_AGV(20) = 30032 + InttoBitidx(bms1check)
-                                            settext("AGV" + Car(car_idx).device_no.ToString + "bms1check" + bms1check.ToString)
-                                            settext("AGV" + Car(car_idx).device_no.ToString + "bms:" + int2str(Car(car_idx).BMS1, 0, 53))
-                                        End If
-                                    End If
-                                End If
-                            End If
-                            If BMSinfoCheck(Car(car_idx).BMS2) Then
-                                bms2check = Car(car_idx).CheckBms(Car(car_idx).BMS2, Car(car_idx).BMSAlarm2)
-                                'ÈõªÊ±†2 ÁãÄÊÖãÁï∞Â∏∏
-                                If Car(car_idx).BMS2(16) > 0 And BMSinfoCheck(Car(car_idx).BMS2) Then
-                                    If (BmsAlertIdx And Car(car_idx).BMS2(16)) > 0 Then
-                                        Car(car_idx).To_AGV(20) = 30100 + InttoBitidx(Car(car_idx).BMS2(16))
-                                    End If
-                                End If
-                                'ÈõªÊ±†2 BMSÁ°¨È´îÁï∞Â∏∏
-                                If Car(car_idx).BMS2(17) >= 64 And BMSinfoCheck(Car(car_idx).BMS2) Then
-                                    Car(car_idx).To_AGV(20) = 30116 + InttoBitidx(Car(car_idx).BMS2(17))
-                                End If
-                                If Car(car_idx).BMSAlarm2(17) > 300 Then
-                                    Car(car_idx).To_AGV(20) = 30165 'Ê≠£Â∏∏ÈÄ£Á∑ö‰∏îÂøÉË∑≥Áï∞Â∏∏
-                                End If
-                                'ÈõªÊ±†‰∫å ‰∏ä‰ΩçÂÅµÊ∏¨Áï∞Â∏∏
-                                If Car(car_idx).BMSAlarm2(17) = 0 Then
-                                    If bms2check > 0 Then
-                                        If (BmsAlertIdx And bms1check) > 0 Then
-                                            Car(car_idx).To_AGV(20) = 30132 + InttoBitidx(bms2check)
-                                            settext("AGV" + Car(car_idx).device_no.ToString + "bms2check" + bms1check.ToString)
-                                            settext("AGV" + Car(car_idx).device_no.ToString + "bms:" + int2str(Car(car_idx).BMS2, 0, 53))
-                                        End If
-                                    End If
-                                End If
-                            End If
-                        End If
-                        If Car(car_idx).To_AGV(20) >= 30000 Then
-                            settext("AGV" + Car(car_idx).device_no.ToString + "Errbms1:" + int2str(Car(car_idx).BMS1, 0, 20))
-                            settext("AGV" + Car(car_idx).device_no.ToString + "Errbms2:" + int2str(Car(car_idx).BMS2, 0, 20))
-                        End If
-
-                    Else
-                        For i = 0 To Me.ListView1.Items.Count - 1
-                            Try
-
-
-                                If CInt(Me.ListView1.Items(i).SubItems(3).Text) = -2 And CInt(Me.ListView1.Items(i).SubItems(1).Text) = Car(car_idx).device_no Then
-                                    'TagÂº∑Âà∂Ë®≠ÁÇ∫0
+                        If check_idx Then
+                            Select Case Car(car_idx).cmd_list(Car(car_idx).cmd_idx)
+                                Case "TagID->0"
                                     Car(car_idx).subcmd = "1"
                                     Car(car_idx).force_tagId(1)
-                                    Query = "delete from  agv_cmd_list where CmdKey =" + CInt(Me.ListView1.Items(i).SubItems(0).Text).ToString
+
+                                    Car(car_idx).cmd_idx += 1
+                                Case "STOP"
+                                    Car(car_idx).step_i = 902
+                                Case "CheckLifter"
+                                    Car(car_idx).cmd_idx += 1
+                                Case "Manual_Forward"
+                                    Car(car_idx).step_i = 21
+                                    Car(car_idx).cmd_idx += 1
+                                Case "Manual_Backward"
+                                    Car(car_idx).step_i = 31
+                                    Car(car_idx).cmd_idx += 1
+                                Case "KeepManual"
+                                    If Car(car_idx).step_i = 999 Then
+                                        Car(car_idx).cmd_idx += 1
+                                    End If
+                                Case "CHECK_START"
+                                    ' Car(car_idx).starttime = Now()
+                                    If Car(car_idx).Car_type = "PIN" Or Car(car_idx).Car_type = "POWER" Then
+                                        If Car(car_idx).get_pin = 5 Then
+                                            Car(car_idx).To_AGV(6) = 0
+                                            Car(car_idx).cmd_idx += 1
+                                        ElseIf Car(car_idx).get_loading = 3 And Car(car_idx).get_pin = 10 And (Car(car_idx).get_Shelf_Car_No = Car(car_idx).cmd_Shelf_Car_No Or Car(car_idx).get_Shelf_Car_No = 0) Then
+                                            '∏¸™´ªP™´´~§@≠P
+                                            Car(car_idx).cmd_idx = 6
+                                        ElseIf Car(car_idx).get_loading = 3 And Car(car_idx).get_pin = 10 Then
+                                            Car(car_idx).To_AGV(20) = 104 '¶≥Æ∆µL±b
+                                        Else
+                                            Car(car_idx).To_AGV(6) = 4 'PIN §U≠∞
+                                        End If
+                                    ElseIf Car(car_idx).Car_type = "ROLL" Then
+                                        If Car(car_idx).get_loading = 3 Then
+                                            Car(car_idx).cmd_idx = 7
+                                            'ElseIf Car(car_idx).get_loading = 3 Then
+                                            '    Car(car_idx).To_AGV(20) = 104 '¶≥Æ∆µL±b
+                                        Else
+                                            Car(car_idx).cmd_idx += 1
+                                        End If
+                                    ElseIf Car(car_idx).Car_type = "CRANE" Then
+                                        Car(car_idx).State = "ACTIVE"
+                                        If Car(car_idx).get_loading = 3 Then
+                                            If Car(car_idx).get_cstid = Car(car_idx).Cmd_RollData Or Car(car_idx).Cmd_RollData = "" Then
+                                                Car(car_idx).cmd_idx = 4
+                                            Else
+                                                Car(car_idx).To_AGV(20) = 104 '¶≥Æ∆µL±b
+                                                'ß‰≥Ã™Ò™∫ ©Ò∏m
+
+                                            End If
+                                        Else
+                                            'ΩTª{FROM TO™∫EQ ™¨∫A
+                                            '-------------•H§Uº“¿¿µ{¶° 
+                                            Dim cst(7) As Byte
+                                            cst = System.Text.Encoding.UTF8.GetBytes(Car(car_idx).Cmd_RollData)
+                                            Array.Resize(cst, 8)
+                                            Car(car_idx).To_AGV(9) = cst(1) * 256 + cst(0)
+                                            Car(car_idx).To_AGV(10) = cst(3) * 256 + cst(2)
+                                            Car(car_idx).To_AGV(11) = cst(5) * 256 + cst(4)
+                                            Car(car_idx).To_AGV(12) = cst(7) * 256 + cst(6)
+                                            '---≥q™æº“¿¿µ{¶° ©R•O™∫CST ID
+                                            Dim From_idx As Integer = Tag_Point_ByTagid(Tag_point_list, Car(car_idx).Cmd_From)
+                                            Dim To_idx As Integer = Tag_Point_ByTagid(Tag_point_list, Car(car_idx).Cmd_To)
+                                            'Dim To_idx As Integer = Tag_Point_ByTagid(Tag_point_list, Car(car_idx).Cmd_From)
+                                            Try
+                                                From_idx = comQGWrapper.CST_SearchByLoc(Tag_point_list(From_idx).LOC)
+
+                                                To_idx = comQGWrapper.CST_SearchByLoc(Tag_point_list(To_idx).LOC)
+                                            Catch ex As Exception
+                                                From_idx = -1
+                                                To_idx = -1
+                                            End Try
+
+                                            For j As Integer = 0 To comQGWrapper.EqPort.Length - 1
+                                                If comQGWrapper.EqPort(j).UnLoadAvail = 1 And comQGWrapper.EqPort(j).tag_id = Car(car_idx).Cmd_From Then
+                                                    'EQ ®S¶≥unload req
+                                                    settext(comQGWrapper.EqPort(j).PortID + "EQ do not unload req")
+                                                    Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "FINSH"
+                                                End If
+                                                If comQGWrapper.EqPort(j).LoadAvail = 1 And comQGWrapper.EqPort(j).tag_id = Car(car_idx).Cmd_To Then
+                                                    'EQ ®S¶≥load req
+                                                    settext(comQGWrapper.EqPort(j).PortID + " do not load req")
+                                                    Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "FINSH"
+                                                End If
+                                            Next
+
+                                            If From_idx = -1 Then
+                                                '∞_©l®S¶≥CST §]•i•H§U©R•O
+                                                settext(Car(car_idx).Cmd_From.ToString + " No CST")
+                                                ' Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "FINSH"
+                                            ElseIf To_idx > -1 And Not Car(car_idx).Cmd_From = Car(car_idx).Cmd_To Then
+                                                settext(Tag_point_list(To_idx).LOC + " had CST")
+                                                'Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 1) = "FINSH"
+
+                                            End If
+
+                                            Car(car_idx).cmd_idx += 1
+
+
+
+                                        End If
+                                        '∑j¥M™≈¥◊¶Ï
+
+                                    ElseIf Car(car_idx).Car_type = "LFT" Then
+                                        If Car(car_idx).get_tagId() Mod 10 = 0 Or Car(car_idx).get_loading = 3 Then
+                                            Car(car_idx).To_AGV(20) = 104 '¶≥Æ∆µL±b
+                                        Else
+                                            Car(car_idx).cmd_idx += 1
+                                        End If
+                                    ElseIf Car(car_idx).Car_type = "FORK" Then
+                                        If Car(car_idx).get_loading = 3 And Car(car_idx).get_pin = 10 Then
+                                            Car(car_idx).cmd_idx = 8
+                                        Else
+                                            Car(car_idx).cmd_idx += 1
+                                        End If
+                                    End If
+                                Case "Check_Loading"
+                                    settext("Check_Loading:" + Agvc_shelfcheck.Checked.ToString)
+                                    If Agvc_shelfcheck.Checked = False And Loading_Check.Checked = False Then
+                                        'bypass ¶b≤¸¿À¨d
+                                        Car(car_idx).cmd_idx += 1
+                                    ElseIf Car(car_idx).get_loading = 3 And Loading_Check.Checked Then
+                                        'ßÛ∑s∏ÍÆ∆Æw
+                                        If Car(car_idx).Car_type = "PIN" Then
+                                            If Car(car_idx).get_Shelf_Car_No() = Car(car_idx).cmd_Shelf_Car_No Then
+                                                Car(car_idx).cmd_idx += 1
+                                            Else
+                                                Car(car_idx).To_AGV(20) = 101
+                                                Car(car_idx).cmd_idx = -2
+                                                Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
+                                            End If
+                                        ElseIf Car(car_idx).Car_type = "ROLL" Then
+                                            Car(car_idx).cmd_idx += 1
+                                        End If
+                                    Else
+                                        'Car(car_idx).cmd_idx = -2
+                                        'Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
+                                        'Car(car_idx).To_AGV(20) = 100
+                                    End If
+                                Case "CHECK_LOAD"
+                                    'ΩTª{™¨∫A 
+                                    If Car(car_idx).Car_type = "LFT" Then
+                                        If Car(car_idx).get_loading = 0 Or Car(car_idx).get_tagId() Mod 10 = 0 Then
+                                            Car(car_idx).To_AGV(20) = 104 '¶≥Æ∆µL±b
+                                        Else
+                                            Car(car_idx).cmd_idx += 1
+                                        End If
+                                    ElseIf Car(car_idx).Car_type = "ROLL" Then
+                                        Dim checkeq As Integer = 0
+                                        Query = "select count(*) FROM `eqp` where Tag_ID=" + Car(car_idx).get_tagId.ToString + " and load_req=1"
+                                        sqlCommand.CommandText = Query
+                                        checkeq = CInt(sqlCommand.ExecuteScalar())
+
+                                        Car(car_idx).cmd_idx += 1
+                                        If checkeq = 0 Then
+                                            Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "FINSH"
+                                        End If
+                                    Else
+                                        Car(car_idx).cmd_idx += 1
+                                    End If
+
+                                Case "CHECK_UNLOAD"
+                                    Dim checkeq As Integer = 0
+                                    Query = "select count(*) FROM `eqp` where Tag_ID=" + Car(car_idx).get_tagId.ToString + " and unload_sensor=1"
+                                    sqlCommand.CommandText = Query
+                                    checkeq = CInt(sqlCommand.ExecuteScalar())
+                                    Car(car_idx).cmd_idx += 1
+                                    If checkeq = 0 Then
+                                        Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "FINSH"
+                                    End If
+                                Case "CHECK_UNLOCK"
+                                    'If Car(car_idx).get_Shelf_Car_No > 0 Then
+                                    For ii As Integer = 0 To shelf_car.Length - 1
+                                        If shelf_car(ii).Shelf_Car_No = Car(car_idx).cmd_Shelf_Car_No And shelf_car(ii).UNLOCK = 1 And shelf_car(ii).step_i = 3 Then
+                                            'πÔ∂H∏—¬Í
+                                            Car(car_idx).cmd_idx += 1
+                                        End If
+                                    Next
+                                    'End If
+                                Case "LOCK"
+                                    Car(car_idx).Lock_user = Car(car_idx).Requestor
+                                    Query = "UPDATE `agv_list` SET `lock_user` = '" + Car(car_idx).Lock_user + "' WHERE `AGVNo` = '" + Car(car_idx).device_no.ToString + "';"
+                                    sqlCommand.CommandText = Query
+                                    sqlCommand.ExecuteNonQuery()
+                                    Car(car_idx).cmd_idx += 1
+                                Case "UNLOCK"
+                                    Car(car_idx).Lock_user = ""
+                                    Query = "UPDATE `agv_list` SET `lock_user` = '" + Car(car_idx).Lock_user + "' WHERE `AGVNo` = '" + Car(car_idx).device_no.ToString + "';"
                                     sqlCommand.CommandText = Query
                                     sqlCommand.ExecuteNonQuery()
 
-                                End If
-                            Catch ex As Exception
+                                    Car(car_idx).cmd_idx += 1
+                                Case "Forward_TagID"
+                                    Car(car_idx).tagId(0) = Car(car_idx).get_tagId()
+                                    Car(car_idx).action(0) = &H110
+                                    Car(car_idx).action(1) = 3
+                                    For i = 1 To 29
+                                        Car(car_idx).tagId(i) = 0
+                                        Car(car_idx).action(i * 2) = 0
+                                        Car(car_idx).action(i * 2 + 1) = 0
+                                    Next
+                                    Car(car_idx).step_i = 1
+                                    Car(car_idx).cmd_idx += 1
+                                Case "Backward_TagID"
+                                    Car(car_idx).tagId(0) = Car(car_idx).get_tagId()
+                                    Car(car_idx).action(0) = &H111
+                                    Car(car_idx).action(1) = 3
+                                    For i = 1 To 240 - 1
+                                        Car(car_idx).tagId(i) = 0
+                                        Car(car_idx).action(i * 2) = 0
+                                        Car(car_idx).action(i * 2 + 1) = 0
+                                    Next
+                                    Car(car_idx).step_i = 1
+                                    Car(car_idx).cmd_idx += 1
 
-                            End Try
-                        Next
-                    End If '(Car(car_idx).flag And Car(car_idx).online)
-                Next
+                                Case "PINUP"
+                                    settext("PINUP")
+                                    If Car(car_idx).get_pin = 10 Then
+                                        Car(car_idx).To_AGV(6) = 0
+                                        Car(car_idx).cmd_idx += 1
+                                        If Car(car_idx).Car_type = "FORK" Then
+                                            Query = " update `agv_list` A,`agv_buffer` B  set A.RollData=B.Buf_Type "
+                                            Query += " where A.AGVNo=" + Car(car_idx).device_no.ToString + " and B.TagID=" + Car(car_idx).get_tagId().ToString + " "
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+
+                                            'buffer
+                                            Query = "update `agv_buffer`  set Buf_Layer=Buf_Layer-1,Buf_Type=if(Buf_Layer=1,'',Buf_Type),LM_Time=now(),LM_User='AGVC_AGVC_PINUP' "
+                                            Query += " where  TagID=" + Car(car_idx).get_tagId().ToString + " and Buf_Layer > 0 "
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                            'add
+                                            Query = "update `agv_buffer`  set Buf_Type='',LM_Time=now(),LM_User='AGVC_TAKE_UP' "
+                                            Query += " where  Buf_Layer = 0 "
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+
+                                        End If
+                                    Else
+                                        Car(car_idx).To_AGV(6) = 2
+                                    End If
+                                Case "PINDOWNFORK"
+                                    settext("PINDOWNFORK") 'just pindowm
+                                    If Car(car_idx).get_pin = 5 Then
+                                        Car(car_idx).To_AGV(6) = 0
+                                        Car(car_idx).cmd_idx += 1
+                                    Else
+                                        Car(car_idx).To_AGV(6) = 4
+                                    End If
+                                Case "PINDOWN"
+                                    settext("PINDOWN")
+                                    If Car(car_idx).get_pin = 5 Then
+                                        Car(car_idx).To_AGV(6) = 0
+                                        Car(car_idx).cmd_idx += 1
+                                        If Car(car_idx).Car_type = "FORK" Then
+                                            'πL±bBUFFER
+                                            'πL±b®Ïbuffer
+                                            Query = "update `agv_buffer` A ,agv_list B  set A.Buf_Layer=if(B.RollData='pallet',A.Buf_Layer+1,1),A.Buf_Type=B.RollData ,A.LM_Time=now(),A.LM_User='AGVC_PINDOWN' "
+                                            Query += " where  TagID=" + Car(car_idx).get_tagId().ToString + " and B.AGVNo=" + Car(car_idx).device_no.ToString
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                            '∞£±b
+                                            Query = " update `agv_list` A  set A.RollData='' "
+                                            Query += " where A.AGVNo=" + Car(car_idx).device_no.ToString
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                            Car(car_idx).cmd_Shelf_Car_No = 0
+                                            Car(car_idx).To_AGV(6) = 0
+                                        End If
+                                    Else
+
+                                        If Car(car_idx).get_Shelf_Car_No > 0 And Agvc_shelfcheck.Checked = True Then
+                                            Query = "update `shelf_car` set LOCATION=0,updateTime=now(),updateName='AGVC" + Car(car_idx).cmd_idx.ToString + "' where LOCATION=" + Car(car_idx).get_tagId.ToString + " and not  Shelf_Car_No=" + Car(car_idx).get_Shelf_Car_No.ToString
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+
+                                            Query = "update `shelf_car` set LOCATION=" + Car(car_idx).get_tagId.ToString + ",updateTime=now(),updateName='PINDOWN' where Shelf_Car_No=" + Car(car_idx).get_Shelf_Car_No.ToString
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                        End If
+                                        Car(car_idx).To_AGV(6) = 4
+                                    End If
+                                Case "ROLLIN"
+                                    settext("ROLLIN")
+                                    ' Car(car_idx).cmd_idx += 1
+                                    'If Car(car_idx).get_loading = 0 Then
+                                    Car(car_idx).To_AGV(6) = &H20
+                                    If Car(car_idx).get_interlock >= 8 And Car(car_idx).get_action = &H20 And Car(car_idx).get_Err = 0 Then
+                                        '≤ß±`µ≤ßÙ
+                                        settext(Car(car_idx).device_no.ToString + ":≤ß±`µ≤ßÙ")
+                                        Car(car_idx).To_AGV(6) = 0
+                                        If Car(car_idx).get_loading = 3 Then
 
 
-                oConn.Close()
-                oConn.Dispose()
-                ListView1_ReNew()
-                Me.PictureBox1.Invalidate()
-                For i = 0 To Car.Length - 1
+                                            Car(car_idx).cmd_idx += 1
+                                            Car(car_idx).RollData = Car(car_idx).Cmd_RollData
+                                            Try
+                                                If Car(car_idx).get_Shelf_Car_No > 0 Then
+                                                    Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'IN', '" + Car(car_idx).RollData + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
+
+                                                Else
+                                                    Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'IN', '" + Car(car_idx).get_Shelf_Car_No.ToString + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
+
+                                                End If
+                                                sqlCommand.CommandText = Query
+                                                sqlCommand.ExecuteNonQuery()
+                                            Catch ex As Exception
+                                                settext("ex:" + ex.Message)
+                                                settext("mysqlerror:" + Query)
+                                            End Try
 
 
-                    If Car(i).BMS1(7) > 2000 And Car(i).BMS1(7) < 7000 Then
-                        Try
-                            Dim file_str As String = ".\log\" + Now.ToString("yyyyMMdd") + "_BMS" + Car(i).device_no.ToString + ".log"
-                            Dim filestream As StreamWriter = New StreamWriter(file_str, True)
-                            Dim bms As String = int2str(Car(i).BMS1, 0, 52)
-                            filestream.WriteLine(Now.ToString("yyyy-MM-dd HH:mm:ss") + ":" + bms)
-                            If Car(i).BMS2(7) > 2000 And Car(i).BMS1(7) < 7000 Then
-                                bms = int2str(Car(i).BMS2, 0, 52)
-                                filestream.WriteLine(Now.ToString("yyyy-MM-dd HH:mm:ss") + ":" + bms)
+                                            Query = "UPDATE `agv_list` SET `RollData` = '" + Car(car_idx).RollData + "' WHERE `AGVNo` = '" + Car(car_idx).device_no.ToString + "';"
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                            Query = "INSERT ignore INTO  `alarm` (`cmd_idx`, `HAPPEN_DATE`, `CLEAR_DATE`, `ALM_ID`, `ALM_DEVICE`, `ALM_TYPE`, `ALM_MSG`, `SUB_LOC`, `ALARM_SPACE`, `CST_ID`) "
+                                            Query += "VALUES ('" + Car(car_idx).cmd_sql_idx.ToString + "',now(),now(), '201', '" + Car(car_idx).device_no.ToString + "', '', '', '" + Car(car_idx).get_tagId.ToString + "', '', '" + Car(car_idx).Shelf_Car_No.ToString + "') ;"
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                            Load_Error()
+
+                                            ' comQGWrapper.EventReportSendOb(GEM.EVENT_UnitAlarmSet, "")
+                                        Else
+                                            Car(car_idx).cmd_idx += 1
+                                            Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "FINSH"
+                                            Try
+                                                If Car(car_idx).get_Shelf_Car_No > 0 Then
+                                                    Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'IN', '" + Car(car_idx).get_Shelf_Car_No.ToString + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
+                                                Else
+                                                    Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'IN', '" + Car(car_idx).RollData + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
+
+                                                End If
+
+                                                sqlCommand.CommandText = Query
+                                                sqlCommand.ExecuteNonQuery()
+                                            Catch ex As Exception
+                                                settext("ex:" + ex.Message)
+                                                settext("mysqlerror:" + Query)
+                                            End Try
+                                        End If
+                                    ElseIf Car(car_idx).get_interlock = 2 And Car(car_idx).get_action = &H20 And Car(car_idx).get_Err = 0 Then
+                                        Car(car_idx).To_AGV(6) = 0
+                                        Car(car_idx).cmd_idx += 1
+                                        Car(car_idx).RollData = Car(car_idx).Cmd_RollData
+                                        Try
+                                            If Car(car_idx).get_Shelf_Car_No > 0 Then
+                                                Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'IN', '" + Car(car_idx).get_Shelf_Car_No.ToString + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
+
+                                            Else
+                                                Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'IN', '" + Car(car_idx).RollData + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
+
+                                            End If
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                        Catch ex As Exception
+                                            settext("ex:" + ex.Message)
+                                            settext("mysqlerror:" + Query)
+                                        End Try
+
+
+                                        Query = "UPDATE `agv_list` SET `RollData` = '" + Car(car_idx).RollData + "' WHERE `AGVNo` = '" + Car(car_idx).device_no.ToString + "';"
+                                        sqlCommand.CommandText = Query
+                                        sqlCommand.ExecuteNonQuery()
+                                    End If
+
+                                    'End If
+                                Case "ROLLOUT"
+                                    settext("ROLLOUT")
+                                    If Car(car_idx).To_AGV(6) = 0 Then
+                                        Try
+                                            If Car(car_idx).get_Shelf_Car_No > 0 Then
+                                                Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'OUT', '" + Car(car_idx).get_Shelf_Car_No.ToString + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
+                                            Else
+                                                Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'OUT', '" + Car(car_idx).RollData + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
+
+                                            End If
+
+
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                        Catch ex As Exception
+                                            settext("ex:" + ex.Message)
+                                            settext("mysqlerror:" + Query)
+                                        End Try
+                                    End If
+
+                                    If Car(car_idx).To_AGV(6) = &H20 Then
+                                        Car(car_idx).To_AGV(6) = &H20
+                                    Else
+                                        Car(car_idx).To_AGV(6) = &H10
+                                    End If
+
+
+                                    If Car(car_idx).get_interlock >= 8 And (Car(car_idx).get_action = &H10 Or Car(car_idx).get_action = &H20) And Car(car_idx).get_Err = 0 Then
+                                        '≤ß±`µ≤ßÙ
+                                        settext(Car(car_idx).device_no.ToString + ":≤ß±`µ≤ßÙ")
+                                        Car(car_idx).To_AGV(6) = 0
+                                        Car(car_idx).cmd_idx += 1
+                                        Query = "INSERT ignore INTO  `alarm` (`cmd_idx`, `HAPPEN_DATE`, `CLEAR_DATE`, `ALM_ID`, `ALM_DEVICE`, `ALM_TYPE`, `ALM_MSG`, `SUB_LOC`, `ALARM_SPACE`, `CST_ID`) "
+                                        Query += "VALUES ('" + Car(car_idx).cmd_sql_idx.ToString + "',now(),now(), '201', '" + Car(car_idx).device_no.ToString + "', '', '', '" + Car(car_idx).get_tagId.ToString + "', '', '" + Car(car_idx).Shelf_Car_No.ToString + "') ;"
+                                        sqlCommand.CommandText = Query
+                                        sqlCommand.ExecuteNonQuery()
+                                        Load_Error()
+                                    ElseIf Car(car_idx).get_interlock = 2 And Car(car_idx).get_action = &H10 And Car(car_idx).get_Err = 0 Then
+                                        ' •u¶≥ROLLOUT
+                                        settext(Car(car_idx).device_no.ToString + ":•u¶≥ROLLOUT")
+                                        Car(car_idx).To_AGV(6) = 0
+                                        Car(car_idx).cmd_idx += 1
+                                        Car(car_idx).RollData = "" '®Æ§l∞£±b
+                                        Query = "UPDATE `agv_list` SET `RollData` = '" + Car(car_idx).RollData + "' WHERE `AGVNo` = '" + Car(car_idx).device_no.ToString + "';"
+                                        sqlCommand.CommandText = Query
+                                        sqlCommand.ExecuteNonQuery()
+                                    ElseIf (Car(car_idx).get_interlock = 6 Or Car(car_idx).get_interlock = 2) And Car(car_idx).get_action = &H20 And Car(car_idx).get_Err = 0 Then
+                                        settext("Exchangeº“¶°µ≤ßÙ")
+                                        Car(car_idx).To_AGV(6) = 0
+                                        Car(car_idx).cmd_idx += 1
+                                        Car(car_idx).RollData = "" '®Æ§l∞£±b
+                                        Query = "UPDATE `agv_list` SET `RollData` = '" + Car(car_idx).RollData + "' WHERE `AGVNo` = '" + Car(car_idx).device_no.ToString + "';"
+                                        sqlCommand.CommandText = Query
+                                        sqlCommand.ExecuteNonQuery()
+                                    ElseIf Car(car_idx).get_interlock = 6 And Car(car_idx).get_action = &H10 And Car(car_idx).get_Err = 0 Then
+                                        settext("Exchange:¶¨Ωc")
+                                        Car(car_idx).To_AGV(6) = &H20
+                                    End If
+                                Case "ACTION"
+                                    Dim ext_cmd_list() As String = Car(car_idx).ext_cmd.Split(",")
+                                    If ext_cmd_list.Length = 3 Then
+                                            If IsNumeric(ext_cmd_list(0)) And IsNumeric(ext_cmd_list(1)) Then
+                                                If Car(car_idx).get_action() = CInt(ext_cmd_list(0)) Or Car(car_idx).get_action = 0 Then
+                                                    Car(car_idx).To_AGV(6) = CInt(ext_cmd_list(0))
+                                                    Car(car_idx).To_AGV(7) = CInt(ext_cmd_list(1))
+                                                End If
+
+                                                If Car(car_idx).get_interlock = 2 And Car(car_idx).get_action = Car(car_idx).To_AGV(6) And Car(car_idx).get_Err = 0 Then
+                                                    Car(car_idx).To_AGV(6) = 0
+                                                    Car(car_idx).To_AGV(7) = 0
+                                                    Car(car_idx).To_AGV(8) = 0
+                                                    Car(car_idx).cmd_idx += 1
+                                                End If
+                                            End If
+                                        End If
+
+                                    Case "FORKIN"
+                                        Dim ForkType As String = ""
+                                        Dim tagid As Tag_Point = New Tag_Point
+                                        settext(Car(car_idx).device_no.ToString + ":FORKIN")
+                                        Dim span As TimeSpan = Now.Subtract(Car(car_idx).starttime)
+
+                                        Car(car_idx).T2 = span.TotalSeconds - Car(car_idx).T1
+
+                                        For j As Integer = 0 To Tag_point_list.Length - 1
+                                            If Tag_point_list(j).TagId = Car(car_idx).get_tagId() Then
+                                                If Tag_point_list(j).tagtype = 1 Then
+                                                    Car(car_idx).To_AGV(6) = &H20
+                                                    Car(car_idx).To_AGV(7) = Tag_point_list(j).stkval
+                                                    tagid = Tag_point_list(j)
+                                                    ForkType = "SHELF"
+                                                    Exit For
+                                                ElseIf Tag_point_list(j).tagtype = 3 Then
+                                                    Car(car_idx).To_AGV(6) = &H21
+                                                    ForkType = "EQ"
+                                                    tagid = Tag_point_list(j)
+
+                                                    Car(car_idx).To_AGV(7) = Tag_point_list(j).stkval
+                                                    Exit For
+                                                End If
+                                            End If
+                                        Next
+                                        If ForkType = "" Then
+
+                                            Query = "INSERT ignore INTO  `alarm` (`cmd_idx`, `HAPPEN_DATE`, `CLEAR_DATE`, `ALM_ID`, `ALM_DEVICE`, `ALM_TYPE`, `ALM_MSG`, `SUB_LOC`, `ALARM_SPACE`, `CST_ID`,BarCodeERR,IL300R,IL300L) "
+                                            Query += "VALUES ('" + Car(car_idx).cmd_sql_idx.ToString + "',now(),now(), '98', '" + Car(car_idx).device_no.ToString + "', '', '', '" + Car(car_idx).get_tagId.ToString + "', '', '" + Car(car_idx).get_cstid.ToString + "'" + _
+                                                "," + Car(car_idx).barcodeError1.ToString + "," + Car(car_idx).IL300L1.ToString + "," + Car(car_idx).IL300R1.ToString + ") ;"
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                            settext(Car(car_idx).device_no.ToString + ":FORKIN¶a¬I≤ß±`" + Car(car_idx).get_tagId().ToString)
+                                            Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "FINSH"
+                                        ElseIf Car(car_idx).get_pin = 0 And Car(car_idx).get_action = 0 And Car(car_idx).get_loading = 3 Then
+                                            settext(Car(car_idx).device_no.ToString + ":∏¸≤¸≤ß±`" + Car(car_idx).get_tagId().ToString)
+                                            Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "FINSH"
+
+                                        ElseIf Car(car_idx).get_pin >= 8 And (Car(car_idx).get_action = &H20 Or Car(car_idx).get_action = &H21) And Car(car_idx).get_Err = 0 Then
+                                            '≤ß±`µ≤ßÙ
+                                            settext(Car(car_idx).device_no.ToString + ":≤ß±`µ≤ßÙ 2DCode" + Car(car_idx).Get2Derror.ToString + "IL:" + Car(car_idx).GetILerror.ToString)
+                                            '•ÿ´e¶€∞ ¥_¬k
+
+
+                                            ' Car(car_idx).cmd_idx += 1
+                                            Car(car_idx).barcodeError0 = Car(car_idx).Get2Derror
+                                            Car(car_idx).IL300L0 = int2Toint32(Car(car_idx).device_status(36), Car(car_idx).device_status(37))
+                                            Car(car_idx).IL300R0 = int2Toint32(Car(car_idx).device_status(38), Car(car_idx).device_status(39))
+                                            Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "FINSH"
+                                            Query = "INSERT ignore INTO  `alarm` (`cmd_idx`, `HAPPEN_DATE`, `CLEAR_DATE`, `ALM_ID`, `ALM_DEVICE`, `ALM_TYPE`, `ALM_MSG`, `SUB_LOC`, `ALARM_SPACE`, `CST_ID`,BarCodeERR,IL300R,IL300L) "
+                                            Query += "VALUES ('" + Car(car_idx).cmd_sql_idx.ToString + "',now(),now(), '" + Car(car_idx).device_status(19).ToString + "', '" + Car(car_idx).device_no.ToString + "', '', '', '" + Car(car_idx).get_tagId.ToString + "', '', '" + Car(car_idx).get_cstid.ToString + "'" + _
+                                                "," + Car(car_idx).barcodeError0.ToString + "," + Car(car_idx).IL300L0.ToString + "," + Car(car_idx).IL300R0.ToString + ") ;"
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+
+
+                                            'ßP¬_®S¶≥©R•O°A¥N≤£•Õ ≤æ∞ ®ÏßO¶Ï∏m™∫©R•O
+                                            Dim cmd_cnt As Integer = 0
+                                            For ii As Integer = 0 To ListView1.Items.Count - 1
+                                                Try
+                                                    If Car(car_idx).device_no = CInt(Me.ListView1.Items(ii).SubItems(1).Text) Then
+                                                        cmd_cnt += 1
+                                                    End If
+                                                Catch ex As Exception
+
+                                                End Try
+                                            Next
+                                            If cmd_cnt <= 1 Then
+                                                Dim cmd As String = Dijkstra_fn_ary(Dijkstra_list(0).ary, Tag_ID_List, Car(car_idx).get_tagId(), Car(car_idx).wait_point, AllBlockPoint + "," + Car(car_idx).Block_Point, Car(car_idx).Block_Path)
+                                                Dim cmd_list() As String = cmd.Split(",")
+                                                Dim to_point As Integer = Car(car_idx).wait_point
+                                                If cmd_list.Length > 5 Then
+                                                    to_point = CInt(cmd_list(4))
+                                                End If
+
+                                                Send_CMD(Car(car_idx).device_no, 1, to_point, "ForkinRetry")
+                                            End If
+
+
+                                            ' Send_CMD(Car(car_idx).device_no, 1, Car(car_idx).wait_point)
+                                            Load_Error()
+                                            If Car(car_idx).device_status(19) = 15404 Or Car(car_idx).device_status(19) = 217 Then
+
+                                                Dim idx As Integer = -1
+                                                idx = comQGWrapper.CST_SearchByLoc(tagid.LOC)
+                                                If idx > -1 Then
+                                                    Dim ans As Integer
+                                                    '  comQGWrapper.CST(idx).CarrierState = GEM.CS_BLOCKED
+                                                    comQGWrapper.EventReportSendOb(GEM.EVENT_TransferAbortInitiated, comQGWrapper.CST(idx))
+                                                    'new 12/02
+                                                    comQGWrapper.EventReportSendOb(GEM.EVENT_TransferAbortCompleted, comQGWrapper.CST(idx))
+                                                    Query = "Delete from mcs_cmd_list where  CARRIERID='" + comQGWrapper.CST(idx).CarrierID + "' or REQUEST_TIME < '" + Now.AddDays(-1).ToString("yyyy-MM-dd HH:mm:ss") + "'"
+                                                    sqlCommand.CommandText = Query
+                                                    sqlCommand.ExecuteNonQuery()
+                                                    Query = "update mcs_cmd_history  set End_time=now() where  COMMANDID='" + comQGWrapper.CST(idx).CommandID + "'"
+                                                    sqlCommand.CommandText = Query
+                                                    sqlCommand.ExecuteNonQuery()
+                                                    comQGWrapper.CST(idx).DEST = ""
+                                                    comQGWrapper.CST(idx).PRIORITY = 0
+                                                    comQGWrapper.CST(idx).mcstime = 0
+                                                    comQGWrapper.CST(idx).CommandID = ""
+                                                    For j As Integer = ListView2.Items.Count - 1 To 0 Step -1
+                                                        Try
+                                                            If ListView2.Items(j).SubItems(0).Text = comQGWrapper.CST(idx).CarrierID Then
+                                                                ListView2.Items.RemoveAt(j)
+                                                            End If
+                                                        Catch ex As Exception
+                                                        End Try
+                                                    Next
+                                                    'new 12/02
+
+                                                    comQGWrapper.CST_Change(comQGWrapper.CST(idx).CarrierID, tagid.ZONE_NAME, tagid.LOC, GEM.CS_BLOCKED)
+                                                    Query = "update `carrier`  set CARRIER_STATUS=" + GEM.CS_BLOCKED.ToString + " "
+                                                    Query += " where  CARRIER_ID='" + comQGWrapper.CST(idx).CarrierID + "'"
+                                                    sqlCommand.CommandText = Query
+                                                    ans = sqlCommand.ExecuteNonQuery()
+                                                    comQGWrapper.EventReportSendOb(GEM.EVENT_TransferAbortCompleted, comQGWrapper.CST(idx))
+                                                    settext(Query + ":" + ans.ToString)
+
+                                                End If
+
+                                            End If
+                                            Car(car_idx).To_AGV(6) = 0
+                                            Car(car_idx).To_AGV(7) = 0
+
+                                        ElseIf Car(car_idx).get_pin = 2 And (Car(car_idx).get_action = &H20 Or Car(car_idx).get_action = &H21) And Car(car_idx).get_Err = 0 Then
+                                            If Car(car_idx).Car_type = "CRANE" And Car(car_idx).get_loading = 0 Then
+                                                Car(car_idx).To_AGV(20) = 116 '•º®˙®ÏCST
+                                            ElseIf Car(car_idx).Car_type = "CRANE" And Car(car_idx).get_loading = 3 And Not Car(car_idx).Cmd_RollData = Car(car_idx).get_cstid And Not Car(car_idx).Cmd_RollData = "" And Not Car(car_idx).Cmd_RollData.StartsWith("UNKNOWN") Then
+                                                'Car(car_idx).To_AGV(20) = 101 '±bÆ∆§£≤≈
+                                                For ii As Integer = 0 To 20
+                                                    If comQGWrapper.CST_SearchByCSTID("UNKNOWN" + ii.ToString + "-" + Car(car_idx).get_cstid) = -1 Then
+                                                        '´ÿ∑s±b
+                                                        Dim new_cst_id As String = "UNKNOWN" + ii.ToString + "-" + Car(car_idx).get_cstid
+                                                        '¶^∂«index 
+                                                        comQGWrapper.CST_Add("UNKNOWN" + ii.ToString + "-" + Car(car_idx).get_cstid, comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString, comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString, GEM.CS_TRANSFERRING)
+                                                        '∑sºW∏ÍÆ∆Æw
+                                                        Query = "INSERT ignore INTO `carrier` (`STK_NAME`, `CARRIER_ID`, `LOT_ID`, `CARRIER_TYPE`, `LOC_NAME`, `LOC_TYPE`, `SUB_LOC`, `CARRIER_STATUS`, `RROCESS_ID`, `STORED_TIME`, `REQ_TIME`, `UPDATE_DATE`, `UPDATE_BY`, `CREATE_DATE`, `CREATE_BY`, `BLOCK_FLAG`, `INV_FLAG`) " + _
+                                                            "VALUES ('" + comQGWrapper.Eqpname + "', '" + new_cst_id + "', '" + new_cst_id + "', '', '" + comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString + "', '3', '" + comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString + "'," + _
+                                                            " '" + GEM.CS_TRANSFERRING.ToString + "', '', now(),now(), now(), 'AGVC', now(), 'AGVC', '0', '1');"
+                                                        sqlCommand.CommandText = Query
+                                                        sqlCommand.ExecuteNonQuery()
+
+
+
+                                                        Dim idx As Integer = -1
+                                                        idx = comQGWrapper.CST_SearchByLoc(tagid.LOC)
+                                                        If idx > -1 Then
+                                                            comQGWrapper.EventReportSendOb(GEM.EVENT_TransferAbortInitiated, comQGWrapper.CST(idx))
+                                                            comQGWrapper.EventReportSendOb(GEM.EVENT_TransferAbortCompleted, comQGWrapper.CST(idx))
+                                                            Query = "Delete from mcs_cmd_list where  CARRIERID='" + comQGWrapper.CST(idx).CarrierID + "' or REQUEST_TIME < '" + Now.AddDays(-1).ToString("yyyy-MM-dd HH:mm:ss") + "'"
+                                                            sqlCommand.CommandText = Query
+                                                            sqlCommand.ExecuteNonQuery()
+                                                            Query = "update mcs_cmd_history  set End_time=now() where  COMMANDID='" + comQGWrapper.CST(idx).CommandID + "'"
+                                                            sqlCommand.CommandText = Query
+                                                            sqlCommand.ExecuteNonQuery()
+                                                            comQGWrapper.EventReportSendOb(GEM.EVENT_CarrierRemoved, comQGWrapper.CST(idx))
+                                                            comQGWrapper.CST_REMOVE(comQGWrapper.CST(idx).CarrierID)
+
+                                                            comQGWrapper.EventReportSendOb(GEM.EVENT_CarrierRemoveCompleted, comQGWrapper.CST(idx))
+                                                        End If
+                                                        If ForkType = "SHELF" Then
+                                                            Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 1) = Car(car_idx).get_tagId.ToString
+                                                        ElseIf ForkType = "EQ" Then
+                                                            Dim idx1 As Integer = Tag_Point_ByTagid(Tag_point_list, Car(car_idx).get_tagId)
+                                                            idx1 = Search_EMPTY_Shelf(Car(car_idx).get_tagId, "", AllBlockPoint + "," + Car(car_idx).Block_Point, Car(car_idx).Block_Path) '¶^∂«™∫¨Otagid
+                                                            If idx1 > 0 And Car(car_idx).cmd_idx < Car(car_idx).cmd_list.Length - 5 Then
+                                                                Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 1) = idx1.ToString
+                                                            Else
+                                                                Car(car_idx).To_AGV(20) = 119 'ß‰§£®Ï™≈¥◊
+                                                            End If
+                                                            ' Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 1) = Car(car_idx).get_tagId.ToString
+                                                        End If
+
+                                                        Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 2) = "Going_Check"
+                                                        Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 3) = "FORKOUT"
+                                                        Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 4) = "FINSH"
+                                                        Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 5) = "FINSH"
+                                                        Car(car_idx).cmd_idx += 1
+                                                        '¨ˆø˝∏ÍÆ∆
+
+                                                        Car(car_idx).barcodeError0 = Car(car_idx).Get2Derror
+                                                        Car(car_idx).IL300L0 = int2Toint32(Car(car_idx).device_status(36), Car(car_idx).device_status(37))
+                                                        Car(car_idx).IL300R0 = int2Toint32(Car(car_idx).device_status(38), Car(car_idx).device_status(39))
+                                                        Car(car_idx).RollData = new_cst_id
+                                                        Try
+                                                            Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'IN', '" + Car(car_idx).RollData.ToString + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
+                                                            sqlCommand.CommandText = Query
+                                                            sqlCommand.ExecuteNonQuery()
+                                                        Catch ex As Exception
+                                                            settext("ex:" + ex.Message)
+                                                            settext("mysqlerror:" + Query)
+                                                        End Try
+
+
+                                                        Query = "INSERT ignore INTO  `alarm` (`cmd_idx`, `HAPPEN_DATE`, `CLEAR_DATE`, `ALM_ID`, `ALM_DEVICE`, `ALM_TYPE`, `ALM_MSG`, `SUB_LOC`, `ALARM_SPACE`, `CST_ID`) "
+                                                        Query += "VALUES ('" + Car(car_idx).cmd_sql_idx.ToString + "',now(),now(), '101', '" + Car(car_idx).device_no.ToString + "', '', '', '" + Car(car_idx).get_tagId.ToString + "', '', '" + Car(car_idx).Shelf_Car_No.ToString + "') ;"
+                                                        sqlCommand.CommandText = Query
+                                                        sqlCommand.ExecuteNonQuery()
+                                                        Query = "UPDATE `agv_list` SET `RollData` = '" + Car(car_idx).RollData + "' WHERE `AGVNo` = '" + Car(car_idx).device_no.ToString + "';"
+                                                        sqlCommand.CommandText = Query
+                                                        sqlCommand.ExecuteNonQuery()
+                                                        'ƒP¶Ï∞£±b
+                                                        Query = "update `shelf`  set CarrierID='' "
+                                                        Query += " where  Tag_ID=" + Car(car_idx).get_tagId().ToString
+                                                        sqlCommand.CommandText = Query
+                                                        sqlCommand.ExecuteNonQuery()
+
+                                                        Query = "update `carrier`  set LOC_NAME='" + comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString + "',SUB_LOC='" + comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString + "' "
+                                                        Query += " where  CARRIER_ID='" + Car(car_idx).RollData + "'"
+                                                        sqlCommand.CommandText = Query
+                                                        sqlCommand.ExecuteNonQuery()
+
+                                                        Query = "update `carrier`  set LOC_NAME='' ,SUB_LOC='' "
+                                                        Query += " where  SUB_LOC='" + tagid.LOC + "'"
+                                                        sqlCommand.CommandText = Query
+                                                        sqlCommand.ExecuteNonQuery()
+                                                        Exit For
+                                                    End If
+                                                Next
+                                                Car(car_idx).To_AGV(6) = 0
+                                                Car(car_idx).To_AGV(7) = 0
+                                            Else
+                                                '•ø±`™¨∫A
+
+                                                Car(car_idx).cmd_idx += 1
+                                                Car(car_idx).barcodeError0 = Car(car_idx).Get2Derror
+                                                Car(car_idx).IL300L0 = int2Toint32(Car(car_idx).device_status(36), Car(car_idx).device_status(37))
+                                                Car(car_idx).IL300R0 = int2Toint32(Car(car_idx).device_status(38), Car(car_idx).device_status(39))
+                                                Car(car_idx).RollData = Car(car_idx).get_cstid ' ¶p™G©R•O•º™æCST™∫∏‹°A¥N¨€´HAGV barcode
+
+
+                                                Try
+                                                    Query = "INSERT INTO `roll_data` (cmdkey,`Car_no`, `Rolltype`, `RollData`,`From_Pos`,`To_Pos`, `LM_time`) VALUES (" + Car(car_idx).cmd_sql_idx.ToString + ",'" + Car(car_idx).device_no.ToString + "', 'IN', '" + Car(car_idx).RollData.ToString + "','" + Car(car_idx).Cmd_From.ToString + "','" + Car(car_idx).Cmd_To.ToString + "', now());"
+                                                    sqlCommand.CommandText = Query
+                                                    sqlCommand.ExecuteNonQuery()
+                                                Catch ex As Exception
+                                                    settext("ex:" + ex.Message)
+                                                    settext("mysqlerror:" + Query)
+                                                End Try
+
+                                                Query = "UPDATE `agv_list` SET `RollData` = '" + Car(car_idx).RollData + "' WHERE `AGVNo` = '" + Car(car_idx).device_no.ToString + "';"
+                                                sqlCommand.CommandText = Query
+                                                sqlCommand.ExecuteNonQuery()
+                                                Dim idx As Integer = -1
+                                                idx = comQGWrapper.CST_SearchByLoc(tagid.LOC)
+
+                                                If idx > -1 Then
+                                                    '¶≥ß‰®ÏCST ¶p™G©R•O¨O"" ©Œ¨Ounkonw ¥N∑sºW ∏ÍÆ∆Æw∑|•d¨€¶PID
+                                                    Dim cstidx As Integer = comQGWrapper.CST_SearchByCSTID(Car(car_idx).RollData)
+                                                    If cstidx > -1 And Not idx = cstidx Then
+                                                        '¶≥CST ¶˝¨O§£¨€¶P
+                                                        comQGWrapper.CST_REMOVE(comQGWrapper.CST(idx).CarrierID)
+                                                        idx = cstidx
+                                                    End If
+                                                    comQGWrapper.CST_Change(comQGWrapper.CST(idx).CarrierID, comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString, comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString, "0", GEM.EVENT_CarrierTransferring)
+                                                    If Car(car_idx).Cmd_RollData = "" Or Car(car_idx).Cmd_RollData.StartsWith("UNKNOWN") Then
+                                                        Query = "insert ignore into `carrier` (STK_NAME,CARRIER_ID,LOT_ID,LOC_NAME,LOC_TYPE,SUB_LOC,CARRIER_STATUS,STORED_TIME,REQ_TIME,UPDATE_DATE,UPDATE_BY,CREATE_DATE,CREATE_BY) " + _
+                                               "VALUES ('" + comQGWrapper.Eqpname + "', '" + Car(car_idx).RollData + "', '" + Car(car_idx).RollData + "','" + comQGWrapper.CST(idx).CarrierZoneName + "',1,'', '4', '', '', now(), 'AGVC', now(), 'AGVC');"
+                                                        sqlCommand.CommandText = Query
+                                                        sqlCommand.ExecuteNonQuery()
+                                                    End If
+                                                    comQGWrapper.EventReportSendOb(GEM.EVENT_CarrierIDRead, comQGWrapper.CST(idx).CarrierID + "," + comQGWrapper.CST(idx).CarrierLoc + "," + comQGWrapper.CST(idx).CarrierZoneName + "," + comQGWrapper.CST(idx).CarrierType + ",0")
+                                                    'CarrierID
+
+                                                End If
+                                                If ForkType = "SHELF" Then
+                                                    For j As Integer = 0 To comQGWrapper.ShelfData.Length - 1
+                                                        Dim a As Integer = Car(car_idx).get_tagId()
+                                                        If comQGWrapper.ShelfData(j).tag_id = Car(car_idx).get_tagId() Then
+                                                            comQGWrapper.ShelfData(j).CarrierID = ""
+                                                        End If
+                                                    Next
+                                                End If
+                                                '¥◊¶Ï∞£±b
+
+
+                                                Query = "update `shelf`  set CarrierID='' "
+                                                Query += " where  Tag_ID=" + Car(car_idx).get_tagId().ToString
+                                                sqlCommand.CommandText = Query
+                                                sqlCommand.ExecuteNonQuery()
+                                                If Car(car_idx).Cmd_RollData.StartsWith("UNKNOWN") Or Car(car_idx).Cmd_RollData = "" Then
+                                                    Query = "delete from  `carrier` where LOC_NAME='" + tagid.ZONE_NAME + "' and SUB_LOC='" + tagid.LOC + "'"
+                                                    sqlCommand.CommandText = Query
+                                                    sqlCommand.ExecuteNonQuery()
+                                                End If
+                                                Query = "update `carrier`  set LOC_NAME='" + comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString + "',SUB_LOC='" + comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString + "' "
+                                                Query += " where  CARRIER_ID='" + Car(car_idx).RollData + "'"
+                                                sqlCommand.CommandText = Query
+                                                sqlCommand.ExecuteNonQuery()
+                                                Car(car_idx).To_AGV(6) = 0
+                                                Car(car_idx).To_AGV(7) = 0
+                                            End If
+                                            '≠n§ÒπÔ±bÆ∆
+                                        End If
+                                        'End If
+                                    Case "FORKOUT"
+                                        settext("FORKOUT")
+                                        '10 shelf  11 EQ      
+                                        Dim ForkType As String = ""
+                                        Dim loc As Tag_Point = New Tag_Point
+                                        If Car(car_idx).RollData = "" Then
+                                            Car(car_idx).RollData = Car(car_idx).get_cstid
+                                        End If
+                                        Dim span As TimeSpan = Now.Subtract(Car(car_idx).starttime)
+                                        Car(car_idx).T4 = span.TotalSeconds - Car(car_idx).T1 - Car(car_idx).T2 - Car(car_idx).T3
+
+                                        For j As Integer = 0 To Tag_point_list.Length - 1
+                                            If Tag_point_list(j).TagId = Car(car_idx).get_tagId Then
+                                                If Tag_point_list(j).tagtype = 1 Then
+                                                    Car(car_idx).To_AGV(6) = &H10
+                                                    Car(car_idx).To_AGV(7) = Tag_point_list(j).stkval
+                                                    loc = Tag_point_list(j)
+                                                    ForkType = "SHELF"
+                                                    Exit For
+                                                ElseIf Tag_point_list(j).tagtype = 3 Then
+                                                    Car(car_idx).To_AGV(6) = &H11
+                                                    Car(car_idx).To_AGV(7) = Tag_point_list(j).stkval
+                                                    loc = Tag_point_list(j)
+                                                    ForkType = "EQ"
+                                                    Exit For
+                                                End If
+                                            End If
+                                        Next
+                                        If ForkType = "" Then
+
+                                            Query = "INSERT ignore INTO  `alarm` (`cmd_idx`, `HAPPEN_DATE`, `CLEAR_DATE`, `ALM_ID`, `ALM_DEVICE`, `ALM_TYPE`, `ALM_MSG`, `SUB_LOC`, `ALARM_SPACE`, `CST_ID`,BarCodeERR,IL300R,IL300L) "
+                                            Query += "VALUES ('" + Car(car_idx).cmd_sql_idx.ToString + "',now(),now(), '99', '" + Car(car_idx).device_no.ToString + "', '', '', '" + Car(car_idx).get_tagId.ToString + "', '', '" + Car(car_idx).get_cstid.ToString + "'" + _
+                                                "," + Car(car_idx).barcodeError1.ToString + "," + Car(car_idx).IL300L1.ToString + "," + Car(car_idx).IL300R1.ToString + ") ;"
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                            settext(Car(car_idx).device_no.ToString + ":FORKOUT¶a¬I≤ß±`" + Car(car_idx).get_tagId.ToString)
+                                            Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "FINSH"
+                                        ElseIf Car(car_idx).get_pin = 0 And Car(car_idx).get_action = 0 And Car(car_idx).get_loading = 0 Then
+                                            settext(Car(car_idx).device_no.ToString + ":∏¸≤¸≤ß±`" + Car(car_idx).get_tagId().ToString)
+                                            Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "FINSH"
+                                        ElseIf Car(car_idx).get_pin >= 8 And (Car(car_idx).get_action = &H10 Or Car(car_idx).get_action = &H11) And Car(car_idx).get_Err = 0 Then
+
+                                            '≤ß±`µ≤ßÙ
+                                            settext(Car(car_idx).device_no.ToString + ":≤ß±`µ≤ßÙ")
+
+                                            Car(car_idx).barcodeError1 = Car(car_idx).Get2Derror
+                                            Car(car_idx).IL300L1 = int2Toint32(Car(car_idx).device_status(36), Car(car_idx).device_status(37))
+                                            Car(car_idx).IL300R1 = int2Toint32(Car(car_idx).device_status(38), Car(car_idx).device_status(39))
+                                            Query = "INSERT ignore INTO  `alarm` (`cmd_idx`, `HAPPEN_DATE`, `CLEAR_DATE`, `ALM_ID`, `ALM_DEVICE`, `ALM_TYPE`, `ALM_MSG`, `SUB_LOC`, `ALARM_SPACE`, `CST_ID`,BarCodeERR,IL300R,IL300L) "
+                                            Query += "VALUES ('" + Car(car_idx).cmd_sql_idx.ToString + "',now(),now(), '" + Car(car_idx).device_status(19).ToString + "', '" + Car(car_idx).device_no.ToString + "', '', '', '" + Car(car_idx).get_tagId.ToString + "', '', '" + Car(car_idx).get_cstid.ToString + "'" + _
+                                                "," + Car(car_idx).barcodeError1.ToString + "," + Car(car_idx).IL300L1.ToString + "," + Car(car_idx).IL300R1.ToString + ") ;"
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                            Load_Error()
+                                            If Car(car_idx).device_status(19) = 15400 Or Car(car_idx).device_status(19) = 218 Then
+                                                '´ÿ•ﬂUNKNOWN ™∫±b
+                                                '•ºß‰®ÏCST ´ÿ•ﬂ∑s±b
+                                                Dim idx1 As Integer = -1
+                                                idx1 = comQGWrapper.CST_SearchByLoc(Car(car_idx).get_tagId)
+                                                If idx1 = -1 Then
+                                                    comQGWrapper.CST_Add("UNKNOWN-" + loc.LOC, loc.ZONE_NAME, loc.LOC, 4)
+                                                    Query = "insert ignore into `carrier` (STK_NAME,CARRIER_ID,LOT_ID,LOC_NAME,LOC_TYPE,SUB_LOC,CARRIER_STATUS,STORED_TIME,REQ_TIME,UPDATE_DATE,UPDATE_BY,CREATE_DATE,CREATE_BY) " + _
+                                                   "VALUES ('" + comQGWrapper.Eqpname + "', '" + "UNKNOWN-" + loc.LOC + "', '" + "UNKNOWN-" + loc.LOC + "','" + loc.ZONE_NAME + "',1,'" + loc.LOC + "', '4', now(), '', now(), 'AGVC', now(), 'AGVC');"
+                                                    Dim ans As Integer
+                                                    sqlCommand.CommandText = Query
+                                                    ans = sqlCommand.ExecuteNonQuery()
+                                                    settext(Query + ":" + ans.ToString)
+                                                End If
+
+
+                                            End If
+
+                                            Car(car_idx).To_AGV(6) = 0
+                                            Car(car_idx).To_AGV(7) = 0
+                                            '∑j¥M™≈•’¶Ï∏m ' •˝ß‰¥◊¶Ï ¶Aß‰EQ 
+                                            Dim totemp As Integer = 0
+
+                                            Dim idx As Integer = Tag_Point_ByTagid(Tag_point_list, Car(car_idx).get_tagId)
+
+                                            idx = Search_EMPTY_Shelf(Car(car_idx).get_tagId, "", AllBlockPoint + "," + Car(car_idx).Block_Point, Car(car_idx).Block_Path) '¶^∂«™∫¨Otagid
+
+                                            If idx > 0 And Car(car_idx).cmd_idx < Car(car_idx).cmd_list.Length - 5 Then
+                                                Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 1) = idx.ToString
+                                                Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 2) = "Going_Check"
+                                                Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 3) = "FORKOUT"
+                                                Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 4) = "FINSH"
+                                                Car(car_idx).cmd_idx += 1
+                                                Try
+                                                    Dim cmd As String = Dijkstra_fn_ary(Dijkstra_list(0).ary, Tag_ID_List, Car(car_idx).get_tagId(), Car(car_idx).wait_point, AllBlockPoint + "," + Car(car_idx).Block_Point, Car(car_idx).Block_Path)
+                                                    Dim cmd_list() As String = cmd.Split(",")
+                                                    Dim to_point As Integer = Car(car_idx).wait_point
+                                                    If cmd_list.Length > 10 Then
+                                                        to_point = CInt(cmd_list(9))
+                                                    End If
+
+                                                    'Send_CMD(Car(car_idx).device_no, 1, to_point, "ForkoutRetry")
+                                                Catch ex As Exception
+
+                                                End Try
+
+
+                                            Else
+                                                Car(car_idx).To_AGV(20) = 119 'ß‰§£®Ï™≈¥◊
+                                            End If
+                                            ' Send_CMD_CST(Car(car_idx).device_no, 2, totemp, Car(car_idx).get_cstid, Now.Ticks.ToString, 9999)
+
+
+                                        ElseIf Car(car_idx).get_pin = 2 And (Car(car_idx).get_action = &H10 Or Car(car_idx).get_action = &H11) And Car(car_idx).get_Err = 0 Then
+                                            ' •u¶≥ROLLOUT
+                                            settext(Car(car_idx).device_no.ToString + ":FORKOUT")
+                                            If Car(car_idx).Car_type = "CRANE" And Car(car_idx).get_loading = 3 Then
+                                                Car(car_idx).To_AGV(20) = 112 '•º®˙®ÏCST
+                                            Else
+                                                Query = "update `shelf` A ,agv_list B  set A.CarrierID='" + Car(car_idx).RollData + "'  "
+                                                Query += " where  Tag_ID=" + Car(car_idx).get_tagId().ToString + " and B.AGVNo=" + Car(car_idx).device_no.ToString
+                                                sqlCommand.CommandText = Query
+                                                sqlCommand.ExecuteNonQuery()
+                                                Car(car_idx).barcodeError1 = Car(car_idx).Get2Derror
+                                                Car(car_idx).IL300L1 = int2Toint32(Car(car_idx).device_status(36), Car(car_idx).device_status(37))
+                                                Car(car_idx).IL300R1 = int2Toint32(Car(car_idx).device_status(38), Car(car_idx).device_status(39))
+                                                Dim idx As Integer = -1
+                                                Dim ans As Integer
+                                                idx = comQGWrapper.CST_SearchByCSTID(Car(car_idx).RollData)
+                                                settext(Car(car_idx).device_no.ToString + ":" + Car(car_idx).RollData + "=" + idx.ToString)
+                                                If idx > -1 Then
+
+
+                                                    If loc.site.IndexOf("common") > -1 Then
+                                                        'º»¶s  
+                                                        comQGWrapper.CST_Change(comQGWrapper.CST(idx).CarrierID, loc.ZONE_NAME, loc.LOC, comQGWrapper.CST(idx).CarrierState, GEM.EVENT_CarrierStoredAlt)
+                                                        comQGWrapper.CST(idx).CarrierState = GEM.CS_STOREDALTERMATE
+                                                    ElseIf loc.tagtype = 1 Then
+                                                        comQGWrapper.CST_Change(comQGWrapper.CST(idx).CarrierID, loc.ZONE_NAME, loc.LOC, comQGWrapper.CST(idx).CarrierState)
+                                                        comQGWrapper.CST(idx).CarrierState = GEM.CS_STOREDCOMPLETED
+                                                    ElseIf loc.tagtype = 3 Then
+                                                        comQGWrapper.CST_Change(comQGWrapper.CST(idx).CarrierID, loc.ZONE_NAME, loc.LOC, comQGWrapper.CST(idx).CarrierState)
+                                                        comQGWrapper.EventReportSendOb(GEM.EVENT_CarrierWaitOut, comQGWrapper.CST(idx))
+                                                        comQGWrapper.EventReportSendOb(GEM.EVENT_CarrierRemoved, comQGWrapper.CST(idx))
+                                                        comQGWrapper.CST(idx).CarrierState = GEM.CS_NONE
+                                                    Else
+                                                        comQGWrapper.CST_Change(comQGWrapper.CST(idx).CarrierID, loc.ZONE_NAME, loc.LOC, comQGWrapper.CST(idx).CarrierState)
+                                                    End If
+                                                    'comQGWrapper.CST_Add(Car(car_idx).RollData, loc.ZONE_NAME, loc.LOC, 4)
+                                                    Query = "insert ignore into `carrier` (STK_NAME,CARRIER_ID,LOT_ID,LOC_NAME,LOC_TYPE,SUB_LOC,CARRIER_STATUS,STORED_TIME,REQ_TIME,UPDATE_DATE,UPDATE_BY,CREATE_DATE,CREATE_BY) " + _
+                                                   "VALUES ('" + comQGWrapper.Eqpname + "', '" + Car(car_idx).RollData + "', '" + Car(car_idx).RollData + "','" + loc.ZONE_NAME + "',1,'" + loc.LOC + "', '4', now(), '', now(), 'AGVC', now(), 'AGVC');"
+                                                    sqlCommand.CommandText = Query
+                                                    ans = sqlCommand.ExecuteNonQuery()
+                                                    settext(Query + ":" + ans.ToString)
+
+
+                                                    setCommtext("CarrierZoneName change:" + comQGWrapper.CST(idx).CarrierID + "->" + loc.ZONE_NAME)
+                                                    Query = "update `carrier`  set LOC_NAME='" + loc.ZONE_NAME + "',LOC_TYPE=" + loc.tagtype.ToString + ",SUB_LOC='" + loc.LOC + "' ,CARRIER_STATUS	=" + comQGWrapper.CST(idx).CarrierState.ToString
+                                                    Query += " where  CARRIER_ID='" + Car(car_idx).RollData + "'"
+                                                    sqlCommand.CommandText = Query
+                                                    sqlCommand.ExecuteNonQuery()
+                                                Else
+                                                    '•ºß‰®ÏCST ´ÿ•ﬂ∑s±b
+                                                    idx = comQGWrapper.CST_Add(Car(car_idx).RollData, loc.ZONE_NAME, loc.LOC, 4)
+                                                    If loc.site.IndexOf("common") > -1 Then
+                                                        'º»¶s  
+                                                        comQGWrapper.CST_Change(comQGWrapper.CST(idx).CarrierID, loc.ZONE_NAME, loc.LOC, comQGWrapper.CST(idx).CarrierState, GEM.EVENT_CarrierStoredAlt)
+                                                        comQGWrapper.CST(idx).CarrierState = GEM.CS_STOREDALTERMATE
+                                                    ElseIf loc.tagtype = 1 Then
+                                                        comQGWrapper.CST(idx).CarrierState = GEM.CS_STOREDCOMPLETED
+                                                        comQGWrapper.CST_Change(comQGWrapper.CST(idx).CarrierID, loc.ZONE_NAME, loc.LOC, comQGWrapper.CST(idx).CarrierState)
+                                                    ElseIf loc.tagtype = 3 Then
+                                                        comQGWrapper.CST_Change(comQGWrapper.CST(idx).CarrierID, loc.LOC, loc.LOC, comQGWrapper.CST(idx).CarrierState)
+                                                        comQGWrapper.EventReportSendOb(GEM.EVENT_CarrierWaitOut, comQGWrapper.CST(idx))
+                                                        comQGWrapper.EventReportSendOb(GEM.EVENT_CarrierRemoved, comQGWrapper.CST(idx))
+                                                        comQGWrapper.CST(idx).CarrierState = GEM.CS_NONE
+                                                    Else
+                                                        comQGWrapper.CST_Change(comQGWrapper.CST(idx).CarrierID, loc.ZONE_NAME, loc.LOC, comQGWrapper.CST(idx).CarrierState)
+                                                    End If
+                                                    Query = "insert ignore into `carrier` (STK_NAME,CARRIER_ID,LOT_ID,LOC_NAME,LOC_TYPE,SUB_LOC,CARRIER_STATUS,STORED_TIME,REQ_TIME,UPDATE_DATE,UPDATE_BY,CREATE_DATE,CREATE_BY) " + _
+                                                   "VALUES ('" + comQGWrapper.Eqpname + "', '" + Car(car_idx).RollData + "', '" + Car(car_idx).RollData + "','" + loc.ZONE_NAME + "',1,'" + loc.LOC + "', '4', now(), '', now(), 'AGVC', now(), 'AGVC');"
+
+                                                    sqlCommand.CommandText = Query
+                                                    ans = sqlCommand.ExecuteNonQuery()
+                                                    settext(Query + ":" + ans.ToString)
+                                                End If
+
+                                                Car(car_idx).RollData = "" '®Æ§l∞£±b   
+                                                Query = "UPDATE `agv_list` SET `RollData` = '" + Car(car_idx).RollData + "' WHERE `AGVNo` = '" + Car(car_idx).device_no.ToString + "';"
+                                                sqlCommand.CommandText = Query
+                                                sqlCommand.ExecuteNonQuery()
+                                                idx = comQGWrapper.CST_SearchByLoc(comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString)
+                                                If (idx > -1) Then
+                                                    Query = "delete from  `carrier`  where CARRIER_ID='" + comQGWrapper.CST(idx).CarrierID + "'"
+                                                    sqlCommand.CommandText = Query
+                                                    sqlCommand.ExecuteNonQuery()
+                                                    comQGWrapper.CST_REMOVE(comQGWrapper.CST(idx).CarrierID)
+                                                End If
+
+                                                Car(car_idx).cmd_Shelf_Car_No = 0
+                                                Car(car_idx).To_AGV(6) = 0
+                                                Car(car_idx).To_AGV(7) = 0
+                                                Car(car_idx).cmd_idx += 1
+
+                                            End If
+
+
+                                        End If
+                                    Case "RECHARGE"
+                                        Car(car_idx).To_AGV(6) = &H30
+                                        If Car(car_idx).get_interlock >= 8 And (Car(car_idx).get_action = &H30) And Car(car_idx).get_Err = 0 Then
+                                            '≤ß±`ƒ≤µo
+                                            settext(Car(car_idx).device_no.ToString + ":•Rπq≤ß±`µ≤ßÙ")
+
+
+                                            Query = "INSERT ignore INTO  `alarm` (`cmd_idx`, `HAPPEN_DATE`, `CLEAR_DATE`, `ALM_ID`, `ALM_DEVICE`, `ALM_TYPE`, `ALM_MSG`, `SUB_LOC`, `ALARM_SPACE`, `CST_ID`) "
+                                            Query += "VALUES ('" + Car(car_idx).cmd_sql_idx.ToString + "',now(),now(), '" + Car(car_idx).device_status(19).ToString + "', '" + Car(car_idx).device_no.ToString + "', '', '', '" + Car(car_idx).get_tagId.ToString + "', '', '" + Car(car_idx).Shelf_Car_No.ToString + "') ;"
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                            Load_Error()
+
+
+                                            Car(car_idx).To_AGV(6) = 0
+                                            Car(car_idx).To_AGV(7) = 0
+
+                                            If Car(car_idx).get_tagId() = 12002 And Car(car_idx).cmd_idx < 30 Then
+
+                                                Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 1) = "12001"
+                                                Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 2) = "Going"
+                                                Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 3) = "12002"
+                                                Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 4) = "Going"
+                                                Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 5) = "RECHARGE"
+                                                Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 6) = "FINSH"
+                                            End If
+                                            Car(car_idx).cmd_idx += 1
+
+
+
+
+
+                                        ElseIf Car(car_idx).get_interlock = 1 And Car(car_idx).To_AGV(6) = Car(car_idx).get_action And (Car(car_idx).get_SOC >= SOC) Then
+                                            '
+                                            settext(Car(car_idx).device_no.ToString + ":SOC to limit:" + SOC.ToString + "%")
+                                            Car(car_idx).To_AGV(6) = 0
+                                            Car(car_idx).cmd_idx += 1
+                                        ElseIf Car(car_idx).get_interlock = 2 And Car(car_idx).To_AGV(6) = Car(car_idx).get_action And Car(car_idx).get_Err = 0 Then
+                                            Car(car_idx).To_AGV(6) = 0
+                                            Car(car_idx).cmd_idx += 1
+                                        ElseIf BitCheck(Car(car_idx).BMS1(16), 8) Or BitCheck(Car(car_idx).BMS1(16), 9) Or BitCheck(Car(car_idx).BMS1(16), 12) Or BitCheck(Car(car_idx).BMS1(16), 13) Then
+                                            Query = "INSERT ignore INTO  `alarm` (`cmd_idx`, `HAPPEN_DATE`, `CLEAR_DATE`, `ALM_ID`, `ALM_DEVICE`, `ALM_TYPE`, `ALM_MSG`, `SUB_LOC`, `ALARM_SPACE`, `CST_ID`) "
+                                            Query += "VALUES ('" + Car(car_idx).cmd_sql_idx.ToString + "',now(),now(), '125', '" + Car(car_idx).device_no.ToString + "', '', '', '" + Car(car_idx).get_tagId.ToString + "', '', '" + Car(car_idx).Shelf_Car_No.ToString + "') ;"
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                            Dim bms As String = int2str(Car(car_idx).BMS1, 0, 53)
+                                            settext(Car(car_idx).device_no.ToString + "BMS1:" + bms)
+                                            bms = int2str(Car(car_idx).BMS2, 0, 53)
+                                            settext(Car(car_idx).device_no.ToString + "BMS2:" + bms)
+                                            Load_Error()
+                                            Car(car_idx).To_AGV(6) = 0
+                                            Car(car_idx).cmd_idx += 1
+                                        ElseIf BitCheck(Car(car_idx).BMS2(16), 8) Or BitCheck(Car(car_idx).BMS2(16), 9) Or BitCheck(Car(car_idx).BMS2(16), 12) Or BitCheck(Car(car_idx).BMS2(16), 13) Then
+                                            Query = "INSERT ignore INTO  `alarm` (`cmd_idx`, `HAPPEN_DATE`, `CLEAR_DATE`, `ALM_ID`, `ALM_DEVICE`, `ALM_TYPE`, `ALM_MSG`, `SUB_LOC`, `ALARM_SPACE`, `CST_ID`) "
+                                            Query += "VALUES ('" + Car(car_idx).cmd_sql_idx.ToString + "',now(),now(), '125', '" + Car(car_idx).device_no.ToString + "', '', '', '" + Car(car_idx).get_tagId.ToString + "', '', '" + Car(car_idx).Shelf_Car_No.ToString + "') ;"
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                            Dim bms As String = int2str(Car(car_idx).BMS1, 0, 53)
+                                            settext(Car(car_idx).device_no.ToString + "BMS1:" + bms)
+                                            bms = int2str(Car(car_idx).BMS2, 0, 53)
+                                            settext(Car(car_idx).device_no.ToString + "BMS2:" + bms)
+                                            Load_Error()
+                                            Car(car_idx).To_AGV(6) = 0
+                                            Car(car_idx).cmd_idx += 1
+
+                                        ElseIf Car(car_idx).get_SOC >= 85 Then
+
+                                            For k As Integer = 0 To ListView1.Items.Count - 1
+                                                If Not ListView1.Items(k).SubItems(2).Text = "4" And ListView1.Items(k).SubItems(1).Text = Car(car_idx).device_no.ToString Then
+                                                    settext(Car(car_idx).device_no.ToString + ":other cmd" + ListView1.Items(k).SubItems(0).Text)
+                                                    Car(car_idx).To_AGV(6) = 0
+                                                    Car(car_idx).cmd_idx += 1
+                                                    Exit For
+                                                End If
+                                            Next
+                                        End If
+                                    Case "ROBOT"
+
+
+                                        Dim ext_cmd_list() As String = Car(car_idx).ext_cmd.Split(",")
+
+                                        If ext_cmd_list.Length = 3 Then
+                                            If IsNumeric(ext_cmd_list(0)) And IsNumeric(ext_cmd_list(1)) Then
+
+                                                Car(car_idx).To_AGV(6) = CInt(ext_cmd_list(0))
+                                                Car(car_idx).To_AGV(7) = CInt(ext_cmd_list(1))
+                                                Car(car_idx).To_AGV(8) = CInt(ext_cmd_list(2))
+                                                If Car(car_idx).get_pin = 2 And Car(car_idx).get_action = Car(car_idx).To_AGV(6) And Car(car_idx).get_Err = 0 Then
+                                                    Car(car_idx).To_AGV(6) = 0
+                                                    Car(car_idx).To_AGV(7) = 0
+                                                    Car(car_idx).To_AGV(8) = 0
+                                                    Car(car_idx).cmd_idx += 1
+                                                End If
+                                            End If
+                                        End If
+
+                                    Case "CounterStart"
+                                        settext(Car(car_idx).device_no.ToString + ":Counter  " + Now().ToString)
+                                        Car(car_idx).To_AGV(6) = 50
+                                        If Car(car_idx).get_action = 50 And Car(car_idx).get_Err = 0 Then
+                                            Car(car_idx).cmd_idx += 1
+                                            Car(car_idx).Counter_timer = Now()
+                                        End If
+
+                                    Case "Waiting"
+                                        If (DateDiff("s", Car(car_idx).Counter_timer, Now) > 250) Then
+                                            Car(car_idx).To_AGV(6) = 0
+                                            Car(car_idx).cmd_idx += 1
+                                        End If
+
+                                    Case "WindStart" 'Wind speed
+                                        settext(Car(car_idx).device_no.ToString + ":Wind  " + Now().ToString)
+                                        Car(car_idx).To_AGV(6) = 6
+                                        Car(car_idx).To_AGV(7) = 1
+                                        If Car(car_idx).get_action = 50 And Car(car_idx).get_interlock = 2 And Car(car_idx).get_Err = 0 Then
+                                            Car(car_idx).cmd_idx += 1
+                                            Car(car_idx).Counter_timer = Now()
+                                        End If
+                                    Case "WindWaiting"
+                                        If (DateDiff("s", Car(car_idx).Counter_timer, Now) > 250) Then
+                                            Car(car_idx).To_AGV(6) = 6
+                                            Car(car_idx).To_AGV(7) = 0
+                                            Car(car_idx).cmd_idx += 1
+                                        End If
+                                    Case "WindEnd"
+                                        settext(Car(car_idx).device_no.ToString + ":Wind  " + Now().ToString)
+                                        Car(car_idx).To_AGV(6) = 6
+                                        Car(car_idx).To_AGV(7) = 0
+                                        If Car(car_idx).get_action = 50 And Car(car_idx).get_interlock = 2 And Car(car_idx).get_Err = 0 Then
+                                            Car(car_idx).To_AGV(6) = 6
+                                            Car(car_idx).To_AGV(7) = 0
+                                            Car(car_idx).cmd_idx += 1
+                                            Car(car_idx).Counter_timer = Now()
+                                        End If
+
+                                    Case "FORCE_OUT"
+                                        settext("FORCE_OUT")
+                                        Car(car_idx).To_AGV(6) = &H11
+                                        If Car(car_idx).get_pin = 2 And Car(car_idx).get_action = &H11 And Car(car_idx).get_Err = 0 Then
+                                            Car(car_idx).To_AGV(6) = 0
+                                            Car(car_idx).cmd_idx += 1
+                                            Car(car_idx).RollData = "" '®Æ§l∞£±b
+                                            Query = "UPDATE `agv_list` SET `RollData` = '" + Car(car_idx).RollData + "' WHERE `AGVNo` = '" + Car(car_idx).device_no.ToString + "';"
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+
+                                        End If
+                                    Case "TAKE_DOWN"
+                                        Dim fn_idx As Integer = 0
+                                        Dim ext_cmd_list() As String = Car(car_idx).ext_cmd.Split(",")
+
+                                        If (ext_cmd_list.Length = 2 Or ext_cmd_list.Length = 4) And IsNumeric(ext_cmd_list(fn_idx)) Then
+                                            Car(car_idx).To_AGV(6) = CInt(ext_cmd_list(fn_idx))
+                                            If Car(car_idx).get_lft_action = CInt(ext_cmd_list(fn_idx)) Then
+
+                                                Car(car_idx).To_AGV(6) = 0
+                                                Car(car_idx).cmd_idx += 1
+                                            End If
+                                        End If
+                                    Case "TAKE_UP"
+                                        Dim fn_idx As Integer = 0
+                                        Dim ext_cmd_list() As String = Car(car_idx).ext_cmd.Split(",")
+
+                                        If (ext_cmd_list.Length = 2 Or ext_cmd_list.Length = 4) And IsNumeric(ext_cmd_list(fn_idx)) Then
+                                            Car(car_idx).To_AGV(6) = CInt(ext_cmd_list(fn_idx)) + 1
+                                            If Car(car_idx).get_lft_action = CInt(ext_cmd_list(fn_idx)) + 1 Then
+                                                Dim dbreader As MySqlDataReader
+                                                Dim Buf_Type As String = ""
+                                                Dim Buf_Layer As Integer = 0
+                                                Dim ans As Integer = 0
+                                                Query = "SELECT Buf_Type,Buf_Layer FROM `agv_buffer` where TagID=" + Car(car_idx).get_tagId().ToString
+                                                sqlCommand.CommandText = Query
+                                                dbreader = sqlCommand.ExecuteReader()
+
+                                                If dbreader.Read Then
+                                                    Buf_Type = dbreader.Item(0)
+                                                    Buf_Layer = CInt(dbreader.Item(1))
+                                                    dbreader.Close()
+                                                    settext("Car" + Car(car_idx).device_no.ToString + "(" + Car(car_idx).get_tagId().ToString + "):" + Buf_Type + ":" + Buf_Layer.ToString)
+                                                    If Buf_Layer > 0 Then
+                                                        Query = " update `agv_list` set RollData='" + Buf_Type + "' "
+                                                        Query += " where AGVNo=" + Car(car_idx).device_no.ToString + ""
+                                                        sqlCommand.CommandText = Query
+                                                        ans = sqlCommand.ExecuteNonQuery()
+                                                        settext(Query + ":" + ans.ToString)
+                                                        Buf_Layer = Buf_Layer - 1
+
+                                                        If Buf_Layer = 0 Then
+                                                            Buf_Type = ""
+                                                        End If
+
+                                                        Query = "update `agv_buffer`  set Buf_Type='" + Buf_Type + "',Buf_Layer=" + Buf_Layer.ToString + ",LM_Time=now(),LM_User='AGVC_TAKE_UP' "
+                                                        Query += " where  TagID=" + Car(car_idx).get_tagId().ToString
+                                                        sqlCommand.CommandText = Query
+                                                        ans = sqlCommand.ExecuteNonQuery()
+                                                        settext(Query + ":" + ans.ToString)
+
+                                                    End If
+                                                End If
+                                                If dbreader.IsClosed = False Then
+                                                    dbreader.Close()
+                                                End If
+                                                Car(car_idx).To_AGV(6) = 0
+                                                Car(car_idx).cmd_idx += 1
+                                            End If
+                                        End If
+                                    Case "ONCAR_CMD"
+                                        Dim fn_idx As Integer = 0
+                                        Dim ext_cmd_list() As String = Car(car_idx).ext_cmd.Split(",")
+
+                                        If ext_cmd_list.Length = 1 And IsNumeric(ext_cmd_list(fn_idx)) Then
+                                            Car(car_idx).To_AGV(6) = CInt(ext_cmd_list(fn_idx))
+                                            If Car(car_idx).get_lft_action = CInt(ext_cmd_list(fn_idx)) Then
+                                                Car(car_idx).To_AGV(6) = 0
+                                                Car(car_idx).cmd_idx += 1
+                                            End If
+                                        End If
+                                    Case "LFT_CTRL"
+                                        Dim ext_cmd As String = Car(car_idx).ext_cmd
+                                        If IsNumeric(ext_cmd) Then
+                                            Car(car_idx).To_AGV(6) = CInt(ext_cmd)
+                                            If Car(car_idx).get_lft_action = CInt(ext_cmd) Then
+                                                Car(car_idx).To_AGV(6) = 0
+                                                Car(car_idx).cmd_idx += 1
+                                            End If
+                                        End If
+                                    Case "PUT_UP"
+                                        Dim fn_idx As Integer = 1
+                                        Dim ext_cmd_list() As String = Car(car_idx).ext_cmd.Split(",")
+
+                                        If (ext_cmd_list.Length = 2 Or ext_cmd_list.Length = 4) And IsNumeric(ext_cmd_list(fn_idx)) Then
+                                            Car(car_idx).To_AGV(6) = CInt(ext_cmd_list(fn_idx)) + 1
+                                            If Car(car_idx).get_lft_action = CInt(ext_cmd_list(fn_idx)) + 1 Then
+                                                Car(car_idx).To_AGV(6) = 0
+                                                Car(car_idx).cmd_idx += 1
+                                            End If
+                                        End If
+                                    Case "PUT_DOWN"
+                                        Dim fn_idx As Integer = 1
+                                        Dim ext_cmd_list() As String = Car(car_idx).ext_cmd.Split(",")
+
+                                        If (ext_cmd_list.Length = 2 Or ext_cmd_list.Length = 4) And IsNumeric(ext_cmd_list(fn_idx)) Then
+                                            Car(car_idx).To_AGV(6) = CInt(ext_cmd_list(fn_idx))
+                                            If Car(car_idx).get_lft_action = ext_cmd_list(fn_idx) Then
+                                                'πL±b®Ïbuffer
+                                                Query = "update `agv_buffer` A ,agv_list B  set A.Buf_Layer=if(B.RollData='pallet',A.Buf_Layer+1,1),A.Buf_Type=B.RollData ,A.LM_Time=now(),A.LM_User='AGVC_PUT_DOWN' "
+                                                Query += " where  TagID=" + Car(car_idx).get_tagId().ToString + " and B.AGVNo=" + Car(car_idx).device_no.ToString
+                                                sqlCommand.CommandText = Query
+                                                sqlCommand.ExecuteNonQuery()
+                                                '∞£±b
+                                                Query = " update `agv_list` A  set A.RollData='' "
+                                                Query += " where A.AGVNo=" + Car(car_idx).device_no.ToString
+                                                sqlCommand.CommandText = Query
+                                                sqlCommand.ExecuteNonQuery()
+                                                'Car(car_idx).cmd_Shelf_Car_No = 0
+                                                Car(car_idx).To_AGV(6) = 0
+                                                Car(car_idx).cmd_idx += 1
+                                            End If
+                                        End If
+                                    Case "LFT_DOWN1"
+
+                                        Car(car_idx).To_AGV(6) = 34
+                                        If Car(car_idx).get_lft_action = 34 Then
+                                            Car(car_idx).To_AGV(6) = 0
+                                            Car(car_idx).cmd_idx += 1
+                                        End If
+                                    Case "LFT_DOWN2"
+
+                                        Car(car_idx).To_AGV(6) = 30
+                                        If Car(car_idx).get_lft_action = 30 Then
+                                            Car(car_idx).To_AGV(6) = 0
+                                            Car(car_idx).cmd_idx += 1
+
+                                        End If
+                                    Case "CHECK_SHELF_LOAD_ON"
+                                        If Car(car_idx).get_shelf_loading = 1 Then
+                                            Car(car_idx).cmd_idx += 1
+                                        Else
+                                            Car(car_idx).To_AGV(20) = 106 ' µL∏¸≤¸
+
+                                        End If
+                                    Case "CHECK_SHELF_LOAD_OFF"
+                                        If Car(car_idx).get_shelf_loading = 0 Then
+                                            Car(car_idx).cmd_idx += 1
+                                        Else
+                                            Car(car_idx).To_AGV(20) = 107 ' ¶≥∏¸≤¸
+                                        End If
+                                    Case "SET_SITE"
+                                        Car(car_idx).Site = Car(car_idx).ext_cmd
+                                        Car(car_idx).cmd_idx += 1
+                                    Case "FINSH"
+                                        Try
+                                            'Query = "update `point` set `X`=" + Car(car_idx).AXIS_X.ToString + ",`Y`=" + Car(car_idx).AXIS_Y.ToString + " where `Y` < 582 and tag_id=" + Car(car_idx).get_tagId().ToString
+                                            ' Dim test As Integer = Update_SQL(Query)
+                                            '  settext("Update_SQL:" + Query + "->" + test.ToString)
+                                            Dim CmdTo As String = Car(car_idx).Cmd_To
+                                            If Car(car_idx).Cmd_To >= 10 Then
+                                                CmdTo = Car(car_idx).get_tagId().ToString
+                                            End If
+                                            If Car(car_idx).Cmd_From = 1 Then
+                                                Car(car_idx).barcodeError0 = Car(car_idx).Get2Derror
+                                                Car(car_idx).IL300L0 = int2Toint32(Car(car_idx).device_status(36), Car(car_idx).device_status(37))
+                                                Car(car_idx).IL300R0 = int2Toint32(Car(car_idx).device_status(38), Car(car_idx).device_status(39))
+                                            End If
+                                            Query = "update  agv_cmd_history set CmdTo='" + CmdTo + "',End_TIme=now(),end_distance=" + Car(car_idx).get_distance.ToString + ",empty_time=" + Car(car_idx).empty_time.ToString + ",Load_time=" + Car(car_idx).Load_time.ToString + ",Error_time=" + Car(car_idx).Error_time.ToString + _
+                                            " , T1=" + Car(car_idx).T1.ToString + " , T2=" + Car(car_idx).T2.ToString + " , T3=" + Car(car_idx).T3.ToString + " , T4=" + Car(car_idx).T4.ToString + _
+                                            " , BarCodeERR0=" + Car(car_idx).barcodeError0.ToString + " , IL300L0=" + Car(car_idx).IL300L0.ToString + " , BarCodeERR1=" + Car(car_idx).barcodeError1.ToString + " , IL300R0=" + Car(car_idx).IL300R0.ToString + " , IL300R1=" + Car(car_idx).IL300R1.ToString + " , IL300L1=" + Car(car_idx).IL300L1.ToString + _
+                                            " where Cmdkey = " + Car(car_idx).cmd_sql_idx.ToString + _
+                                                " and Start_Time >'" + Now().AddHours(-2).ToString("yyyy-MM-dd HH:mm:ss") + "'"
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                            Query = "delete from  agv_cmd_list where CmdKey =" + Car(car_idx).cmd_sql_idx.ToString
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                            If Car(car_idx).get_Shelf_Car_No > 0 And Agvc_shelfcheck.Checked = True And Car(car_idx).Car_type = "PIN" Then
+                                                Query = "update   `shelf_car` set LOCATION=" + Car(car_idx).get_tagId.ToString + ",updateTime=now(),updateName='FINSH_GET' where Shelf_Car_No=" + Car(car_idx).get_Shelf_Car_No.ToString
+                                                sqlCommand.CommandText = Query
+                                                sqlCommand.ExecuteNonQuery()
+                                                Query = "insert into shelf_car_history select * from shelf_car where shelf_car_no =" + Car(car_idx).get_Shelf_Car_No.ToString
+                                                sqlCommand.CommandText = Query
+                                                sqlCommand.ExecuteNonQuery()
+                                            ElseIf Car(car_idx).cmd_Shelf_Car_No > 0 And Car(car_idx).Car_type = "PIN" Then
+                                                Query = "update   `shelf_car` set LOCATION=" + Car(car_idx).get_tagId.ToString + ",updateTime=now(),updateName='FINSH_CMD' where Shelf_Car_No=" + Car(car_idx).cmd_Shelf_Car_No.ToString
+                                                sqlCommand.CommandText = Query
+                                                sqlCommand.ExecuteNonQuery()
+                                                Query = "insert into shelf_car_history select * from shelf_car where shelf_car_no =" + Car(car_idx).cmd_Shelf_Car_No.ToString
+                                                sqlCommand.CommandText = Query
+                                                sqlCommand.ExecuteNonQuery()
+                                            End If
+
+                                        Catch ex As Exception
+                                            settext("FINSH SQL ERROR:" + Query)
+                                        End Try
+                                        For ii As Integer = 0 To 20
+                                            Car(car_idx).To_AGV(ii) = 0
+                                        Next
+                                        Car(car_idx).cmd_sql_idx = 0
+                                        Car(car_idx).Cmd_From = 0
+                                        Car(car_idx).Cmd_To = 0
+                                        Car(car_idx).RequestTime = ""
+                                        Car(car_idx).Requestor = ""
+                                        Car(car_idx).cmd_Shelf_Car_No = 0
+                                        Car(car_idx).cmd_Shelf_Car_Type = ""
+                                        Car(car_idx).cmd_Shelf_Car_size = 0
+                                        ' Car(car_idx).CommandID = ""
+                                        Car(car_idx).cmd_idx = -2 '´Ï¥_•i±µ®¸©R•O™¨∫A
+                                        comQGWrapper.EventReportSendOb(GEM.EVENT_CraneIdle, Car(car_idx).CommandID + "," + comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString)
+
+                                        Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
+                                    Case "FINSH01"
+                                        Try
+
+                                            Query = "update  agv_cmd_history set End_TIme=now(),end_distance=" + Car(car_idx).get_distance.ToString + ",empty_time=" + Car(car_idx).empty_time.ToString + ",Load_time=" + Car(car_idx).Load_time.ToString + ",Error_time=" + Car(car_idx).Error_time.ToString + " where Cmdkey = " + Car(car_idx).cmd_sql_idx.ToString + " and Start_Time >'" + Now().AddHours(-2).ToString("yyyy-MM-dd HH:mm:ss") + "'"
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                            Query = "delete from  agv_cmd_list where CmdKey =" + Car(car_idx).cmd_sql_idx.ToString
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+
+                                        Catch ex As Exception
+                                            settext("FINSH01 SQL ERROR" + Query)
+                                        End Try
+
+                                        For ii As Integer = 0 To 20
+                                            Car(car_idx).To_AGV(ii) = 0
+                                        Next
+                                        Car(car_idx).cmd_sql_idx = 0
+                                        Car(car_idx).Cmd_From = 0
+                                        Car(car_idx).Cmd_To = 0
+                                        Car(car_idx).RequestTime = ""
+                                        Car(car_idx).Requestor = ""
+                                        Car(car_idx).cmd_Shelf_Car_No = 0
+                                        Car(car_idx).cmd_Shelf_Car_Type = ""
+                                        Car(car_idx).cmd_Shelf_Car_size = 0
+                                        comQGWrapper.EventReportSendOb(GEM.EVENT_CraneIdle, Car(car_idx).CommandID + "," + comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString)
+                                        ' Car(car_idx).CommandID = ""
+                                        Car(car_idx).cmd_idx = -2 '´Ï¥_•i±µ®¸©R•O™¨∫A
+
+                                        Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
+                                    Case "GoingNext"
+                                        '•Œ©Û∑j¥M§U≠”¬I¶Ï
+                                        If Car(car_idx).step_i = 999 And Car(car_idx).get_status = 0 Then
+                                            Car(car_idx).cmd_idx += 1
+                                        End If
+                                    Case "NEXT"
+                                        '•Œ©Û∑j¥M§U≠”¬I¶Ï
+                                        ' If Car(car_idx).step_i = 999 And Car(car_idx).get_status = 0 Then
+                                        Car(car_idx).cmd_idx += 1
+                                        ' End If
+                                    Case "NEXT2"
+                                        '•Œ©Û∑j¥M§U≠”¬I¶Ï
+                                        ' If Car(car_idx).step_i = 999 And Car(car_idx).get_status = 0 Then
+                                        Car(car_idx).cmd_idx += 2
+                                    Case "Going"
+                                        Car(car_idx).State = "ACTIVE"
+                                        If Car(car_idx).get_tagId = Car(car_idx).To_pos Then
+
+                                            Car(car_idx).cmd_idx += 1
+                                            Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
+                                            Dim span As TimeSpan = Now.Subtract(Car(car_idx).starttime)
+                                            If Car(car_idx).T1 = 0 Then
+                                                Car(car_idx).T1 = span.TotalSeconds
+                                            Else
+                                                Car(car_idx).T3 = span.TotalSeconds - Car(car_idx).T1 - Car(car_idx).T2
+                                            End If
+                                        ElseIf (Car(car_idx).get_status = 0 Or Car(car_idx).get_status = 2) And Car(car_idx).get_Err = 0 Then
+                                            'ßP¬_Æ…∂°
+                                            Dim wait_setting As Integer = 2
+
+                                            Car(car_idx).Wait_count += 1
+                                            If Car(car_idx).Wait_count > wait_setting Then
+                                                Car(car_idx).cmd_idx -= 1
+                                                Car(car_idx).Wait_count = 0
+                                            End If
+
+                                            settext("Wait_count:" + Car(car_idx).Wait_count.ToString)
+                                            settext("get_tagId:" + Car(car_idx).get_tagId.ToString)
+                                            settext("To_pos:" + Car(car_idx).To_pos.ToString)
+                                            settext("To_temp_pos:" + Car(car_idx).To_temp_pos.ToString)
+                                        ElseIf Car(car_idx).get_status = 4 Then
+                                            Car(car_idx).Wait_count = 0
+                                        End If
+                                        If Car(car_idx).subcmd.IndexOf(Car(car_idx).get_tagId.ToString + ",") > -1 Then
+                                            Car(car_idx).subcmd = Car(car_idx).subcmd.Remove(0, Car(car_idx).subcmd.IndexOf(Car(car_idx).get_tagId.ToString + ","))
+                                        End If
+                                    Case "GoingEmpty"
+                                        'ßP¬_•Xµo™¨∫A °A§£•i•H¶≥∏¸ §]§£•i•H≥ªPIN
+                                        Car(car_idx).State = "ACTIVE"
+                                        If Car(car_idx).get_tagId = Car(car_idx).To_pos Then
+                                            Dim span As TimeSpan = Now.Subtract(Car(car_idx).starttime)
+                                            Car(car_idx).cmd_idx += 1
+                                            Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
+                                            Car(car_idx).T1 = span.TotalSeconds
+                                            If Car(car_idx).T1 < 0 Then
+                                                Car(car_idx).T1 = 0
+                                            End If
+                                        ElseIf Car(car_idx).get_tagId = Car(car_idx).To_temp_pos Then
+                                            Car(car_idx).cmd_idx -= 1
+                                            Car(car_idx).Wait_count = 0
+                                        ElseIf (Car(car_idx).get_status = 0 Or Car(car_idx).get_status = 2) And Car(car_idx).get_Err = 0 Then
+                                            'ßP¬_Æ…∂°
+                                            Dim wait_setting As Integer = 2
+
+                                            Car(car_idx).Wait_count += 1
+                                            If Car(car_idx).Wait_count > wait_setting Then
+                                                Car(car_idx).cmd_idx -= 1
+
+                                            End If
+                                            settext("Wait_count:" + Car(car_idx).Wait_count.ToString)
+                                            settext("get_tagId:" + Car(car_idx).get_tagId.ToString)
+                                            settext("To_pos:" + Car(car_idx).To_pos.ToString)
+                                            settext("To_temp_pos:" + Car(car_idx).To_temp_pos.ToString)
+
+                                        ElseIf Car(car_idx).get_status = 4 Then
+                                            Car(car_idx).Wait_count = 0
+                                        End If
+                                        If Car(car_idx).subcmd.IndexOf(Car(car_idx).get_tagId.ToString + ",") > -1 Then
+                                            Car(car_idx).subcmd = Car(car_idx).subcmd.Remove(0, Car(car_idx).subcmd.IndexOf(Car(car_idx).get_tagId.ToString + ","))
+                                        End If
+                                    Case "Going_Check"
+                                        Car(car_idx).State = "ACTIVE"
+                                        If Car(car_idx).get_tagId = Car(car_idx).To_pos Then
+                                            '®ÏπF•ÿ™∫°A∏ı®Ï§U§@≠”
+                                            Car(car_idx).cmd_idx += 1
+                                            Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
+                                            Car(car_idx).To_pos = 0
+
+                                            Dim span As TimeSpan = Now.Subtract(Car(car_idx).starttime)
+                                            Car(car_idx).T3 = span.TotalSeconds - Car(car_idx).T1 - Car(car_idx).T2
+
+                                        ElseIf (Car(car_idx).get_status = 0 Or Car(car_idx).get_status = 2) And Car(car_idx).get_Err = 0 Then
+                                            'ßP¬_Æ…∂°
+                                            'ßP¬_Æ…∂°
+                                            Dim wait_setting As Integer = 2
+
+                                            If Car(car_idx).get_tagId = Car(car_idx).To_temp_pos Then
+                                                Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
+                                                wait_setting = 3
+                                            End If
+                                            Car(car_idx).Wait_count += 1
+                                            If Car(car_idx).Wait_count > wait_setting Then
+                                                Car(car_idx).cmd_idx -= 1
+                                                Car(car_idx).Wait_count = 0
+                                            End If
+                                            settext(Car(car_idx).device_no.ToString + ":Wait_count:" + Car(car_idx).Wait_count.ToString)
+                                            settext(Car(car_idx).device_no.ToString + ":get_tagId:" + Car(car_idx).get_tagId.ToString)
+                                            settext(Car(car_idx).device_no.ToString + ":To_pos:" + Car(car_idx).To_pos.ToString)
+                                            settext(Car(car_idx).device_no.ToString + ":To_temp_pos:" + Car(car_idx).To_temp_pos.ToString)
+                                        ElseIf DateDiff("s", Car(car_idx).Run_time, Now) > 240 And (Car(car_idx).get_tagId = Car(car_idx).from_pos Or Car(car_idx).get_tagId = Car(car_idx).from_pos + 1) Then
+                                            ' ∂WπL40¨Ì(•º´e∂i®Ï§U≠”¬I¶Ï)
+                                            'Car(car_idx).cmd_idx = -2
+                                            'Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
+                                            'Car(car_idx).To_AGV(20) = 102 '®´¶Ê∂WÆ…
+
+                                        ElseIf Car(car_idx).get_status = 4 Then
+                                            Car(car_idx).Wait_count = 0
+                                        End If
+
+
+                                        If Car(car_idx).subcmd.IndexOf(Car(car_idx).get_tagId.ToString + ",") > -1 Then
+                                            Car(car_idx).subcmd = Car(car_idx).subcmd.Remove(0, Car(car_idx).subcmd.IndexOf(Car(car_idx).get_tagId.ToString + ","))
+                                        End If
+
+                                    Case Else
+                                        '∞ı¶Ê∏ÙÆ|©R•O
+                                        'Dim From_to_ary() As String
+                                        ' Dim path_str As String
+
+                                        Dim R_subcmd As String = ""
+
+                                        Car(car_idx).from_pos = Car(car_idx).get_tagId
+                                        Try
+                                            Car(car_idx).To_pos = CInt(Car(car_idx).cmd_list(Car(car_idx).cmd_idx))
+                                        Catch ex As Exception
+                                            Query = "INSERT ignore INTO  `alarm` (`cmd_idx`, `HAPPEN_DATE`, `CLEAR_DATE`, `ALM_ID`, `ALM_DEVICE`, `ALM_TYPE`, `ALM_MSG`, `SUB_LOC`, `ALARM_SPACE`, `CST_ID`,BarCodeERR,IL300R,IL300L) "
+                                            Query += "VALUES ('" + Car(car_idx).cmd_sql_idx.ToString + "',now(),now(), '97', '" + Car(car_idx).device_no.ToString + "', '', '', '" + Car(car_idx).get_tagId.ToString + "', '', '" + Car(car_idx).get_cstid.ToString + "'" + _
+                                                "," + Car(car_idx).barcodeError1.ToString + "," + Car(car_idx).IL300L1.ToString + "," + Car(car_idx).IL300R1.ToString + ") ;"
+                                            sqlCommand.CommandText = Query
+                                            sqlCommand.ExecuteNonQuery()
+                                            settext(Car(car_idx).device_no.ToString + " Car(car_idx).To_pos Err:" + Car(car_idx).cmd_list(Car(car_idx).cmd_idx))
+                                            Car(car_idx).To_pos = Car(car_idx).from_pos
+                                            Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "FINSH"
+                                            Car(car_idx).cmd_list(Car(car_idx).cmd_idx + 1) = "FINSH"
+                                        End Try
+                                        Dim wait_setting As Integer = 0
+                                        If Car(car_idx).sflag = 1 Then
+                                            wait_setting = 5
+                                        End If
+                                        Car(car_idx).Wait_count += 1
+                                        If Car(car_idx).Wait_count > wait_setting Then
+                                            Car(car_idx).Wait_count = 0
+                                            Car(car_idx).sflag = 0
+                                            If Car(car_idx).from_pos = Car(car_idx).To_pos Then
+                                                Car(car_idx).cmd_idx += 1
+                                            Else
+                                                R_subcmd = Send2AGV(car_idx, 1)
+                                                If Not R_subcmd = "" And Not R_subcmd = Car(car_idx).get_tagId.ToString Then
+                                                    Car(car_idx).cmd_idx += 1
+                                                Else
+                                                    settext(Car(car_idx).device_no.ToString + ":µLπw¨˘∏ÙÆ|", True, Car(car_idx).device_no)
+                                                End If
+
+                                            End If
+                                        Else
+                                            Car(car_idx).subcmd = Car(car_idx).get_tagId().ToString
+                                            settext("wait ∞h¡◊" + Car(car_idx).Wait_count.ToString)
+                                        End If
+
+                                End Select
+                            Car(car_idx).To_AGV(1) = Car(car_idx).To_pos
+                            '-----------------
+                            If Car(car_idx).cmd_idx >= 0 Then
+                                Try
+                                    Query = "update agv_cmd_list set step_i=" + Car(car_idx).cmd_idx.ToString + ",CMD_status='" + Car(car_idx).cmd_list(Car(car_idx).cmd_idx).ToString + "',SubCmd='" + Car(car_idx).subcmd + "',cmd_cnt='" + Car(car_idx).main_subcmd.Split(",").Length.ToString + "' where CmdKey =" + Car(car_idx).cmd_sql_idx.ToString
+                                    sqlCommand.CommandText = Query
+                                    sqlCommand.ExecuteNonQuery()
+                                Catch ex As Exception
+                                    Car(car_idx).To_AGV(20) = 119
+                                    settext("Step ≤ß±`" + Car(car_idx).Wait_count.ToString)
+                                End Try
+
                             End If
 
-                            filestream.Flush()
-                            filestream.Close()
-                        Catch ex As Exception
-
-                        End Try
-
-                    End If
-
-                    If Not Car(i).Lock_user = "" Then
-                        'ÊâãÂãï
-                        Car(i).agv_status = "PM"
-
-                    ElseIf (Car(i).flag = False Or Car(i).status = -2) Then
-                        Car(i).agv_status = "OffLine"
-                    ElseIf Car(i).status = 3 Then
-                        Car(i).agv_status = "Manual"
-
-                    ElseIf Car(i).device_status(6) = 0 And (Car(i).status = 2 Or Car(i).status = 0) Then
-                        If Car(i).cmd_idx = -2 Then
-                            Car(i).agv_status = "Idle"
                         Else
-                            Car(i).agv_status = "Run"
+                            '™Ì¶Cß‰§£®ÏSQL
+                            Query = "update  agv_cmd_history set Requestor=concat(Requestor,'(X)'),End_TIme=now(),end_distance=" + Car(car_idx).get_distance.ToString + ",empty_time=" + Car(car_idx).empty_time.ToString + ",Load_time=" + Car(car_idx).Load_time.ToString + ",Error_time=" + Car(car_idx).Error_time.ToString + " where Cmdkey = " + Car(car_idx).cmd_sql_idx.ToString + " and Start_Time >'" + Now().AddHours(-2).ToString("yyyy-MM-dd HH:mm:ss") + "'"
+                            sqlCommand.CommandText = Query
+                            sqlCommand.ExecuteNonQuery()
+                            Car(car_idx).cmd_idx = -2 '≠´∏m©R•O
+                            comQGWrapper.EventReportSendOb(GEM.EVENT_CraneIdle, Car(car_idx).CommandID + "," + comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString)
+                            '•˝øÔæ‹©R•O
+                            Car(car_idx).cmd_sql_idx = 0
+                            Car(car_idx).Cmd_From = 0
+                            Car(car_idx).Cmd_To = 0
+                            Car(car_idx).RequestTime = ""
+                            Car(car_idx).Requestor = ""
+                            Car(car_idx).cmd_Shelf_Car_No = 0
+                            Car(car_idx).cmd_Shelf_Car_Type = ""
+                            Car(car_idx).cmd_Shelf_Car_size = ""
+                            Car(car_idx).Cmd_RollData = ""
+                            ' Car(car_idx).CommandID = ""
+                            'Car(car_idx).To_AGV(20) = 0
+                            Car(car_idx).State = "IDLE"
+                            For ii As Integer = 0 To 20
+                                Car(car_idx).To_AGV(ii) = 0
+                            Next
                         End If
 
-                    ElseIf Car(i).status = 5 Then
-                        If Car(i).device_status(6) = 48 Then
-                            Car(i).agv_status = "Charge"
-                        Else
-                            Car(i).agv_status = "Run"
+                    End If 'øÔæ‹©R•Oµ≤ßÙ Car(car_idx).cmd_idx = -2
+                Else
+                    '¬˜ΩuÆ…∂∑ßP¬_™∫µ{¶°
+                    If Not Car(car_idx).cmd_idx = -2 Then
+                        If Car(car_idx).get_status = 4 Then
+                            Car(car_idx).Wait_count = 0
                         End If
-                    ElseIf Car(i).status = 4 Or Car(i).status = 1 Or Car(i).status = 4 Or Car(i).status = 12 Or Car(i).status = 8 Then
-                        If Car(i).device_status(44) = 1 Then
-                            Car(i).agv_status = "Mapping"
-                        ElseIf Car(i).sflag = 1 Then
-                            Car(i).agv_status = "Retreat"
-                        Else
-                            Car(i).agv_status = "Run"
+                        Car(car_idx).Wait_count = 0
+
+                        If Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "Going_Check" And Car(car_idx).get_pin = 10 And Car(car_idx).Car_type = "PIN" Then
+                            'ßP¬_•ÿ´e¶Ï∏m§£µ•©Û•Xµo©Œ¨O•Xµo¶a-1
+                            If Car(car_idx).get_loading = 3 Then
+                                Car(car_idx).Loading_err_cnt = 0
+                            End If
+                            Dim a As Integer = Car(car_idx).get_Shelf_Car_No
+                            If Not (Car(car_idx).get_tagId = Car(car_idx).from_pos Or Car(car_idx).get_tagId = Car(car_idx).from_pos - 1) Then
+
+                                If Car(car_idx).get_loading < 3 And Loading_Check.Checked = True And ALL_Loading_check.Checked = True And Car(car_idx).get_pin = 10 Then
+                                    ' Car(car_idx).cmd_idx = -2
+                                    Car(car_idx).Loading_err_cnt += 1
+                                    If Car(car_idx).Loading_err_cnt > 3 Then
+
+                                        Car(car_idx).To_AGV(20) = 100 '  •º®˙®Ï¨[•x
+                                    End If
+                                ElseIf Car(car_idx).get_loading < 3 And Loading_Check.Checked = True And Car(car_idx).get_pin = 10 And Car(car_idx).get_tagId = Car(car_idx).Cmd_From + 2 Then
+                                    '´D•˛Æ…∫ ±±
+                                    Car(car_idx).Loading_err_cnt += 1
+
+
+                                    Car(car_idx).To_AGV(20) = 100 '  •º®˙®Ï¨[•x
+
+                                ElseIf (Not Car(car_idx).get_Shelf_Car_No = Car(car_idx).cmd_Shelf_Car_No) And Car(car_idx).cmd_Shelf_Car_No > 0 And Not Car(car_idx).device_no = 6 And Agvc_shelfcheck.Checked = True And Not Car(car_idx).Car_type = "FORK" Then
+                                    'Car(car_idx).cmd_idx = -2
+
+                                    Car(car_idx).To_AGV(20) = 101 ' ±bÆ∆§£≤≈
+                                End If
+
+                                If Not Car(car_idx).get_tagId = Car(car_idx).To_pos + 1 And Not Car(car_idx).get_tagId = Car(car_idx).To_pos + 2 And Not Car(car_idx).get_tagId = Car(car_idx).To_pos + 3 And Not Car(car_idx).get_tagId = Car(car_idx).To_pos Then
+                                    For ii As Integer = 0 To shelf_car_total_no
+                                        If shelf_car(ii).LOCATION = Car(car_idx).To_pos And shelf_car(ii).LOCATION Mod 10 = 0 Then
+                                            ' Car(car_idx).cmd_idx = -2
+
+                                            Car(car_idx).To_AGV(20) = 103 ' •ÿ™∫∫›¶≥¨[•x
+                                            settext(Car(car_idx).device_no.ToString + ":•ÿ™∫∫›¶≥¨[•xTo_pos " + Car(car_idx).To_pos.ToString + "shelf_car" + shelf_car(ii).Shelf_Car_No.ToString + "LOCATION" + shelf_car(ii).LOCATION.ToString)
+
+                                        End If
+                                    Next
+
+                                End If
+
+                            End If
+                        ElseIf Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "Going_Check" And Loading_Check.Checked = True And Car(car_idx).get_loading < 3 Then
+                            Car(car_idx).To_AGV(20) = 100 ' •º®˙®Ï¨[•x
+
+                        ElseIf Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "GoingEmpty" And Car(car_idx).get_tagId Mod 10 > 3 And (Car(car_idx).get_loading = 1 Or Car(car_idx).get_loading = 2 Or Car(car_idx).get_loading = 3 Or Car(car_idx).get_pin = 10) Then
+                            Car(car_idx).To_AGV(20) = 112 '¶bÆu≤ß±`
+                        ElseIf (Car(car_idx).Car_type = "LFT" Or Car(car_idx).Car_type = "FORK") And Car(car_idx).path_error_count >= 3 Then
+                            Car(car_idx).To_AGV(20) = 114 '¶aπœø˘ª~
+                        ElseIf (Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "Going_Check" Or Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "GoingEmpty" Or Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "Going") And Car(car_idx).get_Err = 0 And Car(car_idx).device_status(15) = 4 And Car(car_idx).Pre_TagID_time < Now.AddMinutes(-5) Then
+                            Car(car_idx).To_AGV(20) = 102
+                        ElseIf (Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "Going_Check" Or Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "GoingEmpty" Or Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "Going") And Car(car_idx).get_Err = 0 And (Car(car_idx).device_status(15) = 12 Or Car(car_idx).device_status(15) = 8) And Car(car_idx).Pre_TagID_time < Now.AddMinutes(-10) Then
+                            Car(car_idx).To_AGV(20) = 102
+                        End If
+                        If Car(car_idx).get_Err = 100 And Car(car_idx).get_loading = 3 Then
+                            '¶€∞ ¥_¬k
+                            Car(car_idx).To_AGV(20) = 0
+
                         End If
 
-                    ElseIf (Car(i).status = -1) Then
-                        Car(i).agv_status = "Down"
-                    Else
-                        Car(i).agv_status = "OffLine"
+                        '  settext(Car(car_idx).device_no.ToString + ":®Æ§l™¨∫A§£µ•©Û4°AµL≠´∑s≥Wπ∫")
+                        If Car(car_idx).get_status = 12 Or Car(car_idx).get_status = 8 Then
+                            Car(car_idx).rate_point = Car(car_idx).get_tagId()
+                            ' settext(Car(car_idx).device_no.ToString + ":≥]©w±€¬‡¬I¶Ï" + Car(car_idx).rate_point.ToString + "°AµL≠´∑s≥Wπ∫")
+                        End If
+
+                        If Car(car_idx).sflag = 1 Then
+                            settext(Car(car_idx).device_no.ToString + ":∞h¡◊§§°AµL≠´∑s≥Wπ∫")
+                        ElseIf Not Car(car_idx).cmd_list(Car(car_idx).cmd_idx).StartsWith("Going") Then
+                            '  settext(Car(car_idx).device_no.ToString + ":™¨∫A->" + Car(car_idx).cmd_list(Car(car_idx).cmd_idx) + "°AµL≠´∑s≥Wπ∫")
+                        ElseIf Car(car_idx).subcmd.Split(",").Length > Car(car_idx).RePath Then
+                            ' settext(Car(car_idx).device_no.ToString + ":™¯´◊§j©Û3°AµL≠´∑s≥Wπ∫")
+                        ElseIf Car(car_idx).subcmd.Split(",").Length <= 2 Then
+                            ' settext(Car(car_idx).device_no.ToString + ":™¯´◊§p©Û2°AµL≠´∑s≥Wπ∫")
+                        ElseIf Not Car(car_idx).get_status = 4 Then
+                            'settext(Car(car_idx).device_no.ToString + ":®Æ§l™¨∫A§£µ•©Û4°AµL≠´∑s≥Wπ∫")
+                            If Car(car_idx).get_status = 12 Or Car(car_idx).get_status = 8 Then
+                                Car(car_idx).rate_point = Car(car_idx).get_tagId()
+                                'settext(Car(car_idx).device_no.ToString + ":≥]©w±€¬‡¬I¶Ï" + Car(car_idx).rate_point.ToString + "°AµL≠´∑s≥Wπ∫")
+                            End If
+                        ElseIf Car(car_idx).get_tagId = Car(car_idx).To_temp_pos Then
+                            ' settext(Car(car_idx).device_no.ToString + ":®Æ§l®ÏπFº»Æ…∞±®Æ¬I")
+                        ElseIf Car(car_idx).subcmd.EndsWith(Car(car_idx).To_pos.ToString) Then
+                            '  settext(Car(car_idx).device_no.ToString + ":§w≥Wπ∫®Ï•ÿ™∫¶a" + Car(car_idx).subcmd + "°AµL≠´∑s≥Wπ∫")
+                        ElseIf Car(car_idx).rate_point = Car(car_idx).get_tagId() Then
+                            ' settext(Car(car_idx).device_no.ToString + ":•ÿ´e±€¬‡§§" + Car(car_idx).subcmd + "°AµL≠´∑s≥Wπ∫")
+                        Else
+                            Dim R_subcmd As String = Send2AGV(car_idx, 11)
+                            settext(Car(car_idx).device_no.ToString + ":≠´∑s≥Wπ∫∏ÙÆ|" + R_subcmd, True, Car(car_idx).device_no)
+                            Query = "update agv_cmd_list set step_i=" + Car(car_idx).cmd_idx.ToString + ",CMD_status='" + Car(car_idx).cmd_list(Car(car_idx).cmd_idx).ToString + "',SubCmd='" + Car(car_idx).subcmd + "',cmd_cnt='" + Car(car_idx).main_subcmd.Split(",").Length.ToString + "' where CmdKey =" + Car(car_idx).cmd_sql_idx.ToString
+                            sqlCommand.CommandText = Query
+                            sqlCommand.ExecuteNonQuery()
+
+                        End If
+                        'If Car(car_idx).step_i = 999 And Car(car_idx).cmd_list(Car(car_idx).cmd_idx) = "KeepManual" Then
+                        '    Car(car_idx).cmd_idx += 1
+                        'End If
                     End If
-                    If Not Car(i).agv_status = Car(i).Pre_agv_status And Car(i).device_no > 0 Then
-                        Update_SQL("INSERT INTO `agv_status_history` (`AGVNo`, `Status`, `updatetime`, `PreStatus`, `Preupdatetime`) VALUES ('" + Car(i).device_no.ToString + "', '" + Car(i).agv_status + "', CURRENT_TIMESTAMP, '" + Car(i).Pre_agv_status + "', '" + Car(i).agv_status_time + "');")
-                        Car(i).Pre_agv_status = Car(i).agv_status
-                        Car(i).agv_status_time = Now.ToString("yyyy-MM-dd HH:mm:ss")
+                    '¬˜Ωu≤æ∞£TAGID™∫©R•O
+                    Try
+
+
+                        For i = 0 To Me.ListView1.Items.Count - 1
+                            If Not Me.ListView1.Items(i).SubItems(5).Text.StartsWith("ERROR") And CInt(Me.ListView1.Items(i).SubItems(1).Text) = Car(car_idx).device_no And CInt(Me.ListView1.Items(i).SubItems(3).Text) = -2 Then
+                                Car(car_idx).subcmd = "1"
+                                Car(car_idx).force_tagId(1)
+                                Query = "delete from  agv_cmd_list where CmdKey =" + CInt(Me.ListView1.Items(i).SubItems(0).Text).ToString
+                                sqlCommand.CommandText = Query
+                                sqlCommand.ExecuteNonQuery()
+                                Query = "update  agv_cmd_history set End_TIme=now() where Cmdkey = " + CInt(Me.ListView1.Items(i).SubItems(0).Text).ToString
+                                sqlCommand.CommandText = Query
+                                sqlCommand.ExecuteNonQuery()
+                                Car(car_idx).cmd_sql_idx = 0
+                                '  Car(car_idx).CommandID = ""
+                                Car(car_idx).State = "IDLE"
+                                Car(car_idx).cmd_idx = -2 '´Ï¥_•i±µ®¸©R•O™¨∫A
+                                comQGWrapper.EventReportSendOb(GEM.EVENT_CraneIdle, Car(car_idx).CommandID + "," + comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString)
+                            End If
+                        Next
+                    Catch ex As Exception
+                        Car(car_idx).cmd_sql_idx = 0
+                        ' Car(car_idx).CommandID = ""
+                        Car(car_idx).State = "IDLE"
+                        Car(car_idx).cmd_idx = -2 '´Ï¥_•i±µ®¸©R•O™¨∫A
+                        comQGWrapper.EventReportSendOb(GEM.EVENT_CraneIdle, Car(car_idx).CommandID + "," + comQGWrapper.Eqpname + "C" + Car(car_idx).device_no.ToString)
+                    End Try
+
+                    Dim check_idx As Boolean = Check_SQL_idx(Car(car_idx).cmd_sql_idx)
+                    If Car(car_idx).To_AGV(20) >= 100 And Car(car_idx).To_AGV(20) < 1000 And Not (Car(car_idx).To_AGV(20) = 105 And (Car(car_idx).get_Volt < Car(car_idx).Recharge_volt Or Car(car_idx).get_SOC < Car(car_idx).Recharge_SOC Or Car(car_idx).device_status(20) = 8)) And check_idx = False Then
+                        'πq¿£´Ï¥_
+                        Car(car_idx).cmd_idx = -2 '≠´∏m©R•O
+                        Car(car_idx).To_AGV(20) = 0
                     End If
-                Next
-            Catch ex As Exception
-                ' MsgBox(ex.StackTrace.ToString)
-                settext(ex.Message + " cmd_timer:" + ex.StackTrace.ToString)
-                If car_idx >= 0 And car_idx <= car_no Then
-                    settext("ErrCarinfo:" + Car(car_idx).device_no.ToString + "," + Car(car_idx).get_info)
+                    '
                 End If
-            End Try
-            cmd_timer_IsBusy = False
-        End If
-    End Sub
-    Function Update_SQL(ByVal Query As String)
-        Dim oConn As MySqlConnection
-        Dim sqlCommand As New MySqlCommand
-        oConn = New MySqlConnection(Mysql_str)
-        oConn.Open()
-        sqlCommand.Connection = oConn
-        sqlCommand.CommandText = Query
-        Try
-            Update_SQL = sqlCommand.ExecuteNonQuery()
-        Catch ex As Exception
-            Update_SQL = 0
-        End Try
+                '≤ƒ§@∂•¨q§W¶Ï≤ß±` 
+
+                'πq¶¿1 ™¨∫A≤ß±`
+                'If Car(car_idx).BMS1(16) > 0 Then
+                '    If (BmsAlertIdx And Car(car_idx).BMS1(16)) > 0 Then
+                '        Car(car_idx).To_AGV(20) = 30000 + InttoBitidx(Car(car_idx).BMS1(16))
+                '    ElseIf (BmsWarmIdx And Car(car_idx).BMS1(16)) > 0 Then
+                '        'ƒµ≥¯≥B≤zæ˜®Ó
+                '        '¬Í®Æ->¨£®Ï•RπqØ∏
+                '        Send_CMD(Car(car_idx).device_no, 1, 7, "Bat1ErrLock" + Car(car_idx).BMS1(16).ToString)
+                '        Dim chargerlist() As String = Car(car_idx).Recharge_Point_list.Split(",")
+                '        For change_i As Integer = 0 To chargerlist.Length - 1
+                '            Dim flag As Boolean = False
+                '            'ßP¬_•RπqØ∏¶≥®S¶≥®Æ§l•Rπq
+                '            For j As Integer = 0 To Me.ListView1.Items.Count - 1
+                '                If (Me.ListView1.Items(j).SubItems(2).Text) = 4 And Me.ListView1.Items(j).SubItems(3).Text = chargerlist(change_i) Then
+                '                    flag = True
+                '                End If
+                '            Next
+                '            If flag = False Then
+                '                '•RπqØ∏IDLE
+                '                If Send_CMD(Car(car_idx).device_no, 1, chargerlist(change_i)) Then
+                '                    Exit For
+                '                End If
+                '            End If
+                '        Next
+
+                '    End If
+                'End If
+                ''πq¶¿1  BMSµw≈È≤ß±`
+                'If Car(car_idx).BMS1(17) >= 64 Then
+                '    Car(car_idx).To_AGV(20) = 30016 + InttoBitidx(Car(car_idx).BMS1(17))
+                'End If
+
+                ''πq¶¿2 ™¨∫A≤ß±`
+                'If Car(car_idx).BMS2(16) > 0 Then
+                '    If (BmsAlertIdx And Car(car_idx).BMS2(16)) > 0 Then
+                '        Car(car_idx).To_AGV(20) = 30100 + InttoBitidx(Car(car_idx).BMS2(16))
+                '    End If
+                'End If
+                ''πq¶¿2 BMSµw≈È≤ß±`
+                'If Car(car_idx).BMS2(17) >= 64 Then
+                '    Car(car_idx).To_AGV(20) = 30116 + InttoBitidx(Car(car_idx).BMS2(17))
+                'End If
+
+
+                'If Car(car_idx).get_auto = 0 And Car(car_idx).get_Err = 0 And Car(car_idx).get_tagId > 1 And Car(car_idx).status >= 0 Then
+
+                '    Dim bms1check, bms2check As Integer
+                '    bms1check = Car(car_idx).CheckBms(Car(car_idx).BMS1, Car(car_idx).BMSAlarm1)
+                '    bms2check = Car(car_idx).CheckBms(Car(car_idx).BMS2, Car(car_idx).BMSAlarm2)
+                '    '≠n¶≥§ﬂ∏ı§~∞ª¥˙≤ß±`
+
+                '    'πq¶¿§@ §W¶Ï∞ª¥˙≤ß±`
+                '    If Car(car_idx).BMSAlarm1(17) = 0 Then
+                '        If bms1check > 0 Then
+                '            If (BmsAlertIdx And bms1check) > 0 Then
+                '                Car(car_idx).To_AGV(20) = 30032 + InttoBitidx(bms1check)
+                '                settext("AGV" + Car(car_idx).device_no.ToString + "bms1check" + bms1check.ToString)
+                '                settext("AGV" + Car(car_idx).device_no.ToString + "bms:" + int2str(Car(car_idx).BMS1, 0, 53))
+                '            End If
+                '        End If
+                '    End If
+
+                '    'πq¶¿§G §W¶Ï∞ª¥˙≤ß±`
+                '    If Car(car_idx).BMSAlarm2(17) = 0 Then
+                '        If bms2check > 0 Then
+                '            If (BmsAlertIdx And bms1check) > 0 Then
+                '                Car(car_idx).To_AGV(20) = 30132 + InttoBitidx(bms2check)
+                '                settext("AGV" + Car(car_idx).device_no.ToString + "bms2check" + bms1check.ToString)
+                '                settext("AGV" + Car(car_idx).device_no.ToString + "bms:" + int2str(Car(car_idx).BMS2, 0, 53))
+                '            End If
+                '        End If
+                '    End If
+
+                '    If Car(car_idx).BMSAlarm1(17) > 300 Then
+                '        Car(car_idx).To_AGV(20) = 30065 '•ø±`≥sΩu•B§ﬂ∏ı≤ß±`
+                '        settext("AGV" + Car(car_idx).device_no.ToString + "bms1:" + int2str(Car(car_idx).BMS1, 0, 53))
+
+                '    End If
+                '    If Car(car_idx).BMSAlarm2(17) > 300 Then
+                '        Car(car_idx).To_AGV(20) = 30165 '•ø±`≥sΩu•B§ﬂ∏ı≤ß±`
+                '        settext("AGV" + Car(car_idx).device_no.ToString + "bms2:" + int2str(Car(car_idx).BMS2, 0, 53))
+                '    End If
+                'End If
+            Else
+                For i = 0 To Me.ListView1.Items.Count - 1
+                    Try
+                        If CInt(Me.ListView1.Items(i).SubItems(2).Text) = 0 And CInt(Me.ListView1.Items(i).SubItems(3).Text) = -2 And CInt(Me.ListView1.Items(i).SubItems(1).Text) = Car(car_idx).device_no Then
+                            'Tag±j®Ó≥]¨∞0
+                            Car(car_idx).subcmd = "1"
+                            Car(car_idx).force_tagId(1)
+                            Query = "delete from  agv_cmd_list where CmdKey =" + CInt(Me.ListView1.Items(i).SubItems(0).Text).ToString
+                            sqlCommand.CommandText = Query
+                            sqlCommand.ExecuteNonQuery()
+                        End If
+                    Catch ex As Exception
+
+                    End Try
+                Next
+            End If '(Car(car_idx).flag And Car(car_idx).online)
+        Next
+
 
         oConn.Close()
         oConn.Dispose()
+            cmd_timer_isbusy = False
+        End If
+        ListView1_ReNew()
+        Me.PictureBox1.Invalidate()
+        'settext("Cmd_timer:" + (Now.Ticks - timestart).ToString)
+    End Sub
+
+    Function InttoBitidx(ByVal IntVal As Integer)
+        InttoBitidx = -1
+        For code As Integer = 0 To 15
+            If (IntVal >> code) = 1 Then
+                Return code
+            End If
+        Next
 
     End Function
 
@@ -2669,7 +4045,7 @@ Public Class Form1
     Sub writelog(ByVal str As String, ByVal device_no As Integer)
         Try
             Dim sw As StreamWriter = New StreamWriter(".\log\" + Now().ToString("yyyyMMdd") + "_toPC_" + device_no.ToString + ".log", True, Encoding.Default)
-            sw.Write(Now.ToString + ":" + str + vbCrLf)
+            sw.Write(Now.ToString("HH:mm:ss fff") + " " + str + vbCrLf)
             sw.Flush()
             sw.Close()
         Catch ex As Exception
@@ -2681,8 +4057,8 @@ Public Class Form1
 
     Sub writedoorlog(ByVal str As String)
         Try
-            Dim sw As StreamWriter = New StreamWriter(".\log\" + Now().ToString("yyyyMMdd") + "_todoorPC.log", True, Encoding.Default)
-            sw.Write(Now.ToString + ":" + str + vbCrLf)
+            Dim sw As StreamWriter = New StreamWriter(Now().ToString(".\log\" + "yyyyMMdd") + "_todoorPC.log", True, Encoding.Default)
+            sw.Write(Now.ToString("yyyy-MM-dd HH:mm:ss") + ":" + str + vbCrLf)
             sw.Flush()
             sw.Close()
         Catch ex As Exception
@@ -2719,7 +4095,7 @@ Public Class Form1
             sqlCommand.ExecuteNonQuery()
             ListView1_ReNew()
         Else
-            MsgBox("ÁõÆÁöÑÂú∞‰∏çÂèØÁÇ∫Èõ∂")
+            MsgBox("•ÿ™∫¶a§£•i¨∞πs")
         End If
 
         oConn.Close()
@@ -2743,30 +4119,22 @@ Public Class Form1
                     Dim d As New settextcallback(AddressOf settext)
                     Me.Invoke(d, New Object() {logout, append})
                 ElseIf append = True Then
-                    If settext_filter.Checked = True Then
-                        If car_no = CInt(txtCar.Text) Or car_no = 0 Then
-                            Me.Log_txt.AppendText(logout + vbCrLf)
-                        End If
-                    Else
-                        Me.Log_txt.AppendText(logout + vbCrLf)
-                    End If
+
+                    Me.Log_txt.AppendText(logout + vbCrLf)
+
                     Log_txt_cnt += 1
-                    If Log_txt_cnt > 300 Then
+                    If Log_txt_cnt > 100 Then
                         Log_txt_cnt = 1
                         Me.Log_txt.Text = ""
                     End If
-                    log.WriteLine(Now.ToString("yyyy-MM-dd HH:mm:ss") + ":" + logout)
+                    log.WriteLine(Now.ToString("HH:mm:ss fff") + " " + logout)
                 Else
-                    If settext_filter.Checked = True Then
-                        If car_no = CInt(txtCar.Text) Or car_no = 0 Then
-                            Me.Log_txt.Text = logout + vbCrLf
-                        End If
-                    Else
-                        Me.Log_txt.Text = logout + vbCrLf
-                    End If
+
+                    Me.Log_txt.Text = logout + vbCrLf
 
 
-                    log.WriteLine(Now.ToString("yyyy-MM-dd HH:mm:ss") + ":" + logout)
+
+                    log.WriteLine(Now.ToString("HH:mm:ss") + " " + logout)
                 End If
 
                 log.Flush()
@@ -2775,11 +4143,59 @@ Public Class Form1
 
         End Try
     End Sub
-   
-   
+
+    Dim commlog As StreamWriter
+    Dim commlog_filename As String = ""
+    Dim commLog_txt_cnt As Integer = 0
+    Sub setCommtext(ByVal logout As String, Optional ByVal append As Boolean = True, Optional ByVal car_no As Integer = 0)
+
+        If Not logout = "" Then
+
+            Try
+
+                Dim file_str As String = ".\log\" + Now.ToString("yyyyMMdd") + "_comm.log"
+                If commlog_filename = "" Then
+                    commlog_filename = file_str
+                    commlog = New StreamWriter(commlog_filename, True, Encoding.Default)
+                ElseIf Not file_str = commlog_filename Then
+                    commlog.Flush()
+                    commlog.Close()
+                    commlog_filename = file_str
+                    commlog = New StreamWriter(commlog_filename, True, Encoding.Default)
+                End If
+
+                If Me.CommTxt.InvokeRequired Then
+                    Dim d As New settextcallback(AddressOf setCommtext)
+                    Me.Invoke(d, New Object() {logout, append})
+                ElseIf append = True Then
+
+                    Me.CommTxt.AppendText(logout + vbCrLf)
+
+                    commLog_txt_cnt += 1
+                    If commLog_txt_cnt > 299 Then
+                        commLog_txt_cnt = 0
+                        Me.CommTxt.Text = ""
+                    End If
+                    commlog.WriteLine(Now.ToString("HH:mm:ss") + " " + logout)
+                Else
+
+                    Me.CommTxt.Text = logout + vbCrLf
 
 
-  
+
+                    commlog.WriteLine(Now.ToString("HH:mm:ss") + " " + logout)
+                End If
+
+                commlog.Flush()
+
+            Catch ex As Exception
+
+            End Try
+        End If
+
+    End Sub
+
+
 
 
 
@@ -2805,33 +4221,54 @@ Public Class Form1
         oConn.Open()
         sqlCommand.Connection = oConn
         Try
-
-
-
-
-            Query = "SELECT CmdKey,AGVno,CmdFrom,CmdTo,Pri_Wt,CMD_Status,date_format(RequestTime,'%Y-%m-%d %H:%i:%s'),Requestor,Shelf_Car_No,Shelf_Car_type,Shelf_Car_Size,RollData,ext_cmd  "
+            Query = "SELECT CmdKey,AGVno,CmdFrom,CmdTo,Pri_Wt,CMD_Status,date_format(RequestTime,'%Y-%m-%d %H:%i:%s'),Requestor,Shelf_Car_No,Shelf_Car_type,Shelf_Car_Size,RollData,ext_cmd,McsCmdKey  "
             Query += "FROM `agv_cmd_list`   where 1 order by Pri_Wt DESC,RequestTime ASC "
-            ListView1.Items.Clear()
+            'ListView1.Items.Clear()
             sqlCommand.CommandText = Query
             mReader = sqlCommand.ExecuteReader()
+            Dim keylist(500) As String
+            Dim key_idx As Integer = 0
             While (mReader.Read)
+                Dim idx As Integer = -1
                 Dim item As New ListViewItem()
+                keylist(key_idx) = mReader.Item(0).ToString
+                key_idx += 1
                 item.Text = mReader.Item(0)
-                For i = 1 To 12
+                For i = 1 To 13
                     item.SubItems.Add(mReader.Item(i).ToString)
                 Next
-                ListView1.Items.Add(item)
-            End While
-            mReader.Close()
-            For i = 0 To ListView1.Items.Count - 1
-                If ListView1.Items(i).SubItems(0).Text = select_idx Then
-                    ListView1.Items(i).Selected = True
 
+                For i = 0 To ListView1.Items.Count - 1
+                    If ListView1.Items(i).SubItems(0).Text = mReader.Item(0).ToString Then
+                        idx = i
+                        Exit For
+                    End If
+                Next
+                If idx >= 0 Then
+                    '≠◊ßÔ
+                    Dim flag As Boolean = False
+
+                    For i = 0 To item.SubItems.Count - 1
+                        If Not item.SubItems(i).Text = ListView1.Items(idx).SubItems(i).Text Then
+                            ListView1.Items(idx).SubItems(i).Text = item.SubItems(i).Text
+                        End If
+                    Next
+                Else
+
+                    ListView1.Items.Add(item)
+                End If
+            End While
+            For i = 0 To ListView1.Items.Count - 1
+
+                If Array.IndexOf(keylist, ListView1.Items(i).SubItems(0).Text) < 0 Then
+                    ListView1.Items(i).Remove()
+                    Exit For
                 End If
             Next
-
+            ListView1.ListViewItemSorter = New ListViewItemComparer(4)
+            mReader.Close()
         Catch ex As Exception
-            settext("Mysql Áï∞Â∏∏")
+            settext("List renew Mysql ≤ß±`")
         End Try
         ' MsgBox(My.Settings.MyDB)
         Query = "SELECT A.Shelf_Car_No,A.Shelf_Car_type,A.Shelf_Car_Size,A.LOCATION,A.flag,if (B.X is null,0, B.X),if (B.Y is null ,0,B.Y),A.step_i,A.UNLOCK_FLAG,A.offset_sensor "
@@ -2865,7 +4302,6 @@ Public Class Form1
             Catch ex As Exception
                 MsgBox(i)
             End Try
-
             shelf_car(i).car.Visible = True
             shelf_car(i).car.Top = shelf_car(i).Y - offset_y
             shelf_car(i).car.Left = shelf_car(i).X - 15 - offset_x
@@ -2874,110 +4310,11 @@ Public Class Form1
         End While
         ' Array.Resize(shelf_car, i)
         mReader.Close()
-
-        Try
-            For i = 0 To car_no
-                If Car(i).flag = True Then
-                    Dim temp_Shelf_Car_No As String = ""
-
-                    If Car(i).get_Shelf_Car_No > 0 And Car(i).Car_type = "ROLL" Then
-                        temp_Shelf_Car_No = Car(i).get_Shelf_Car_No.ToString
-                    ElseIf Car(i).get_Shelf_Car_No > 0 And Agvc_shelfcheck.Checked = True Then
-
-
-                        temp_Shelf_Car_No = Car(i).get_Shelf_Car_No.ToString
-                    ElseIf Car(i).cmd_Shelf_Car_No > 0 Then
-                        temp_Shelf_Car_No = Car(i).cmd_Shelf_Car_No.ToString
-                    Else
-                        temp_Shelf_Car_No = " 0 "
-                    End If
-                    Dim VC1_MAX, VC1_MIN As Integer
-                    Dim VC2_MAX, VC2_MIN As Integer
-                    VC1_MAX = VC2_MAX = 0
-                    VC1_MIN = 9999
-                    VC2_MIN = 9999
-                    For j As Integer = 18 To 32
-                        If Car(i).BMS1(j) > VC1_MAX Then
-                            VC1_MAX = Car(i).BMS1(j)
-                        End If
-                        If Car(i).BMS1(j) < VC1_MIN And Car(i).BMS1(j) > 0 Then
-                            VC1_MIN = Car(i).BMS1(j)
-                        End If
-                        If Car(i).BMS2(j) > VC2_MAX Then
-                            VC2_MAX = Car(i).BMS2(j)
-                        End If
-                        If Car(i).BMS2(j) < VC2_MIN And Car(i).BMS2(j) > 0 Then
-                            VC2_MIN = Car(i).BMS2(j)
-                        End If
-                    Next
-                    Query = "update  `agv_list` set CmdKey=" + Car(i).cmd_sql_idx.ToString + ",carWork=" + Car(i).device_status(6).ToString + ",AGVAction='" + Car(i).get_pin().ToString + "',"
-                    Query += "Status='" + Car(i).status.ToString + "',Position=" + Car(i).get_tagId().ToString + ",ErrorCode='" + Car(i).get_Err().ToString + "',"
-                    Query += "Speed=" + Car(i).get_Speed().ToString + ",BatteryVoltage=" + Car(i).get_Volt().ToString + ",Shelf_Car_No=" + temp_Shelf_Car_No + ",Loading='"
-                    Query += Car(i).get_loading.ToString + "',distance=" + Car(i).get_distance.ToString + ",Temp=" + Car(i).device_status(21).ToString + ",tag_change_time='"
-                    Query += Car(i).Pre_TagID_time.ToString("yyyy-MM-dd HH:mm:ss") + "',AGV_X=" + Car(i).AXIS_X.ToString + " ,AGV_Y=" + Car(i).AXIS_Y.ToString + ",AGV_TH=" + Car(i).AXIS_Z.ToString + ",AGV_Z=" + Car(i).device_status(22).ToString
-                    Query += ",VB1=" + Car(i).BMS1(7).ToString + ",IB1=" + Car(i).BMS1(8).ToString + " ,BT1=" + Car(i).BMS1(10).ToString + ",SOC1=" + Car(i).BMS1(14).ToString + ",SOH1=" + Car(i).BMS1(15).ToString
-                    Query += ",PROT1=" + Car(i).BMS1(16).ToString + ",STAT1=" + Car(i).BMS1(17).ToString + " ,CHG_AH1=" + (Car(i).BMS1(37) * 65536 + Car(i).BMS1(38)).ToString + ",DSG_AH1=" + (Car(i).BMS1(39) * 65536 + Car(i).BMS1(40)).ToString + ",CYCLE1=" + Car(i).BMS1(41).ToString
-                    Query += ",VB2=" + Car(i).BMS2(7).ToString + ",IB2=" + Car(i).BMS2(8).ToString + " ,BT2=" + Car(i).BMS2(10).ToString + ",SOC2=" + Car(i).BMS2(14).ToString + ",SOH2=" + Car(i).BMS2(15).ToString
-                    Query += ",PROT2=" + Car(i).BMS2(16).ToString + ",STAT2=" + Car(i).BMS2(17).ToString + " ,CHG_AH2=" + (Car(i).BMS2(37) * 65536 + Car(i).BMS2(38)).ToString + ",DSG_AH2=" + (Car(i).BMS2(39) * 65536 + Car(i).BMS2(40)).ToString + ",CYCLE2=" + Car(i).BMS2(41).ToString
-                    Query += ",VC1_MAX=" + VC1_MAX.ToString + ",VC1_MIN=" + VC1_MIN.ToString + " ,VC2_MAX=" + VC2_MAX.ToString + ",VC2_MIN=" + VC2_MIN.ToString + ",BT1_2=" + Car(i).BMS1(11).ToString + ",BT2_2=" + Car(i).BMS2(11).ToString + ",car_site='" + Car(i).Site.ToString + "'"
-                    Query += "  where AGVNo=" + Car(i).device_no.ToString
-                    sqlCommand.CommandText = Query
-                    sqlCommand.ExecuteNonQuery()
-
-                    For k As Integer = 1 To 3
-                        Dim BMS(53) As Integer
-                        If k = 1 Then
-                            BMS = Car(i).BMS1
-                        ElseIf k = 2 Then
-                            BMS = Car(i).BMS2
-                        ElseIf k = 3 Then
-                            BMS = Car(i).BMS3
-                        End If
-                        If BMSinfoCheck(BMS) Then
-                            Query = "UPDATE `agv_bat_info` SET "
-                            For j As Integer = 0 To 41
-                                Query += " Val_" + j.ToString + "=" + BMS(j).ToString + " , "
-                            Next
-                            Query += " LM_TIME=now() where AGVNo=" + Car(i).device_no.ToString + " and slot=" + k.ToString
-                            sqlCommand.CommandText = Query
-                            sqlCommand.ExecuteNonQuery()
-                        End If
-                    Next
-
-                End If
-
-                ' If Car(i).Car_type = "FORK" And Car(i).cmd_Shelf_Car_No > 0 And Car(i).cmd_idx > 0 And Car(i).get_pin = 10 And Car(i).get_loading = 3 Then
-                If Car(i).Car_type = "FORK" And Car(i).cmd_Shelf_Car_No > 0 And Car(i).get_pin = 10 And Car(i).get_loading = 3 Then
-                    If Car(i).cmd_list(Car(i).cmd_idx) = "Going_Check" Or Car(i).cmd_list(Car(i).cmd_idx) = "PINDOWN" Then
-                        Query = "update `shelf_car` set LOCATION=" + Car(i).get_tagId.ToString + ",updateTime=now(),updateName='List_ReNew' where Shelf_Car_No=" + Car(i).cmd_Shelf_Car_No.ToString
-                        sqlCommand.CommandText = Query
-                        sqlCommand.ExecuteNonQuery()
-                    End If
-
-                ElseIf Car(i).get_Shelf_Car_No > 0 And Car(i).cmd_idx > 0 And Car(i).get_pin = 10 And Agvc_shelfcheck.Checked = True And Not Car(i).Car_type = "FORK" Then
-                    Query = "update `shelf_car` set LOCATION=" + Car(i).get_tagId.ToString + ",updateTime=now(),updateName='List_ReNew' where Shelf_Car_No=" + Car(i).get_Shelf_Car_No.ToString
-                    sqlCommand.CommandText = Query
-                    sqlCommand.ExecuteNonQuery()
-
-                ElseIf Car(i).cmd_Shelf_Car_No > 0 And Car(i).cmd_idx > 0 And Car(i).get_pin = 10 And Car(i).step_i > 1 And Not Car(i).Car_type = "FORK" Then
-                    Query = "update `shelf_car`   set LOCATION=" + Car(i).get_tagId.ToString + ",updateTime=now(),updateName='List_ReNew' where Shelf_Car_No=" + Car(i).cmd_Shelf_Car_No.ToString
-
-                    sqlCommand.CommandText = Query
-                    sqlCommand.ExecuteNonQuery()
-                End If
-            Next
-
-            ' settext("Update SQL:" + Query)
-        Catch ex As Exception
-            settext("Update SQL:" + Query)
-            settext("Update SQL ERROR")
-        End Try
-        Query = "update `system_info` set updatetime=now() where SYSTEM_TYPE='AGVC'"
-
-        sqlCommand.CommandText = Query
-        sqlCommand.ExecuteNonQuery()
+     
         oConn.Close()
         oConn.Dispose()
+
+
     End Sub
 
 
@@ -2987,7 +4324,7 @@ Public Class Form1
         If Car(view_car_idx).flag Then
             Car(view_car_idx).To_AGV(6) = 10
         Else
-            MsgBox(view_car_idx.ToString + "ËôüËªäÊú™ÂïüÁî®")
+            MsgBox(view_car_idx.ToString + "∏π®Æ•º±“•Œ")
 
         End If
 
@@ -2997,7 +4334,7 @@ Public Class Form1
         If Car(view_car_idx).flag Then
             Car(view_car_idx).To_AGV(6) = 20
         Else
-            MsgBox(view_car_idx.ToString + "ËôüËªäÊú™ÂïüÁî®")
+            MsgBox(view_car_idx.ToString + "∏π®Æ•º±“•Œ")
         End If
 
     End Sub
@@ -3006,7 +4343,7 @@ Public Class Form1
         If Car(view_car_idx).flag Then
             Car(view_car_idx).To_AGV(13) = 0
         Else
-            MsgBox(view_car_idx.ToString + "ËôüËªäÊú™ÂïüÁî®")
+            MsgBox(view_car_idx.ToString + "∏π®Æ•º±“•Œ")
         End If
 
     End Sub
@@ -3015,7 +4352,7 @@ Public Class Form1
         If Car(view_car_idx).flag Then
             Car(view_car_idx).To_AGV(13) = 1
         Else
-            MsgBox(view_car_idx.ToString + "ËôüËªäÊú™ÂïüÁî®")
+            MsgBox(view_car_idx.ToString + "∏π®Æ•º±“•Œ")
         End If
 
     End Sub
@@ -3041,7 +4378,7 @@ Public Class Form1
             Car(view_car_idx).action = Action
             Car(view_car_idx).step_i = 1
         Else
-            MsgBox("ÁõÆÂâçAGVÁÇ∫ÊâãÂãïÁãÄÊÖã")
+            MsgBox("•ÿ´eAGV¨∞§‚∞ ™¨∫A")
         End If
     End Sub
 
@@ -3069,9 +4406,9 @@ Public Class Form1
 
 
 
-  
 
-   
+
+
 
 
 
@@ -3096,7 +4433,7 @@ Public Class Form1
 
             End Try
         Else
-            MsgBox("Ë´ãÂÖàÈÅ∏ÊìáÂëΩ‰ª§")
+            MsgBox("Ω–•˝øÔæ‹©R•O")
         End If
 
         oConn.Close()
@@ -3125,14 +4462,14 @@ Public Class Form1
     End Sub
     Sub status_log(ByVal idx As Integer)
         Dim flag As Boolean = False
-        For i As Integer = 0 To 20
+        For i As Integer = 0 To 33
             If Not Car(idx).device_status(i) = Car(idx).Pre_device_status(i) Then
                 Car(idx).Pre_device_status(i) = Car(idx).device_status(i)
                 flag = True
             End If
         Next
         If flag Then
-            writelog(int2str(Car(idx).device_status, 0, 30), Car(idx).device_no)
+            writelog(int2str(Car(idx).device_status, 0, 50), Car(idx).device_no)
         End If
     End Sub
 
@@ -3140,11 +4477,19 @@ Public Class Form1
     Private Sub Button9_Click_1(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button9.Click
         ' Car(Cidx(CInt(txtCar.Text))).cmd_idx = -2
         Car(Cidx(CInt(txtCar.Text))).subcmd = Car(Cidx(CInt(txtCar.Text))).get_tagId
+        Car(Cidx(CInt(txtCar.Text))).To_AGV(5) = 0
+        Car(Cidx(CInt(txtCar.Text))).To_AGV(6) = 0
+
         Car(Cidx(CInt(txtCar.Text))).To_AGV(20) = 0
         Car(Cidx(CInt(txtCar.Text))).step_i = 905
         Car(Cidx(CInt(txtCar.Text))).path_error_count = 0
         Car(Cidx(CInt(txtCar.Text))).path_error_tagid = 0
         Car(Cidx(CInt(txtCar.Text))).Pre_TagID_time = Now()
+        For i As Integer = 0 To 17
+            Car(Cidx(CInt(txtCar.Text))).BMSAlarm1(i) = 0
+            Car(Cidx(CInt(txtCar.Text))).BMSAlarm2(i) = 0
+        Next
+        testval = 0
     End Sub
     Sub Load_Path_base()
         Dim oConn As MySqlConnection
@@ -3157,23 +4502,24 @@ Public Class Form1
         oConn = New MySqlConnection(Mysql_str)
         oConn.Open()
         sqlCommand.Connection = oConn
-        Query = "SELECT A.From_Point,A.To_Point,A.Forward_Sensor,A.Forward_Speed,A.backward_Sensor,A.backward_Speed,B.X, B.Y, C.X, C.Y,A.distance"
+        Query = "SELECT A.From_Point,A.To_Point,A.Forward_Sensor,A.Forward_Speed,A.backward_Sensor,A.backward_Speed,B.X, B.Y, C.X, C.Y,A.Priwt"
         Query += " FROM `path` A"
         Query += " LEFT JOIN `point` B ON A.`From_Point` = B.Tag_ID"
         Query += " LEFT JOIN `point` C ON A.`To_Point` = C.Tag_ID where   A.active=1 "
         sqlCommand.CommandText = Query
         mReader = sqlCommand.ExecuteReader()
         i = 0
-        ReDim path_base(10000)
+        ReDim path_base(5000)
         Dim action As String = ""
         Dim idx As Integer = 0
+        Dim priwt As Double = 1
         While (mReader.Read)
             Try
                 path_base(i).From_Point = CInt(mReader.Item(0)) 'from
                 path_base(i).To_Point = CInt(mReader.Item(1)) 'To
                 For j As Integer = 0 To i
                     If path_base(i).From_Point = path_base(j).To_Point And path_base(i).To_Point = path_base(j).From_Point Then
-                        MsgBox("Ë∑ØÂæëÈáçË§á:" + path_base(i).From_Point.ToString + "->" + path_base(i).To_Point.ToString)
+                        MsgBox("∏ÙÆ|≠´Ω∆:" + path_base(i).From_Point.ToString + "->" + path_base(i).To_Point.ToString)
                         Continue While
                     End If
                 Next
@@ -3205,10 +4551,8 @@ Public Class Form1
                     MsgBox(path_base(i).From_Point.ToString + "->" + path_base(i).To_Point.ToString)
                     ' MsgBox(path_base(i).To_Point)
                 End Try
-                path_base(i).distance = Round(((path_base(i).X1 - path_base(i).X2) ^ 2 + (path_base(i).Y1 - path_base(i).Y2) ^ 2) ^ 0.5, 0)
-                path_base(i).offsetdistance = CInt(mReader.Item(10)) ' 
-             
-                Path_base_Dictionary.Add(path_base(i).From_Point * 100000 + path_base(i).To_Point, path_base(i))
+                priwt = CDbl(mReader.Item(10))
+                path_base(i).distance = Round((((path_base(i).X1 - path_base(i).X2) ^ 2 + (path_base(i).Y1 - path_base(i).Y2) ^ 2) ^ 0.5) / priwt, 0)
                 i += 1
             Catch ex As Exception
                 MsgBox("error" + path_base(i).From_Point.ToString + "," + path_base(i).To_Point.ToString + ex.Message)
@@ -3224,46 +4568,43 @@ Public Class Form1
         sqlCommand.CommandText = Query
         mReader = sqlCommand.ExecuteReader()
         i = 0
-        ReDim path_S(500)
+        ReDim path_S(1000)
         While (mReader.Read)
-           
+
             Try
 
- 
-            path_S(i).From_Point = CInt(mReader.Item(0)) 'from
-            path_S(i).M_Point = CInt(mReader.Item(1)) 'To
-            path_S(i).To_Point = CInt(mReader.Item(2)) 'To
-            'path_base(path_i).direction = 0
-            path_S(i).direction0 = CInt(mReader.Item(3)) '
 
-            action = mReader.Item(4)
-            If IsNumeric(action.Substring(1, 1)) Then
-                idx = 1
-            Else
-                idx = 2
-            End If
-            path_S(i).action0 = action.Substring(0, idx)  '
-            path_S(i).Sensor0 = action.Substring(idx) '
+                path_S(i).From_Point = CInt(mReader.Item(0)) 'from
+                path_S(i).M_Point = CInt(mReader.Item(1)) 'To
+                path_S(i).To_Point = CInt(mReader.Item(2)) 'To
+                'path_base(path_i).direction = 0
+                path_S(i).direction0 = CInt(mReader.Item(3)) '
+
+                action = mReader.Item(4)
+                If IsNumeric(action.Substring(1, 1)) Then
+                    idx = 1
+                Else
+                    idx = 2
+                End If
+                path_S(i).action0 = action.Substring(0, idx)  '
+                path_S(i).Sensor0 = action.Substring(idx) '
 
 
-            path_S(i).speed0 = CInt(mReader.Item(5)) ' 
-            path_S(i).direction1 = CInt(mReader.Item(6)) '
+                path_S(i).speed0 = CInt(mReader.Item(5)) ' 
+                path_S(i).direction1 = CInt(mReader.Item(6)) '
 
-            action = mReader.Item(7)
-            If IsNumeric(action.Substring(1, 1)) Then
-                idx = 1
-            Else
-                idx = 2
-            End If
-            path_S(i).action1 = action.Substring(0, idx)  '
-            path_S(i).Sensor1 = action.Substring(idx) '
+                action = mReader.Item(7)
+                If IsNumeric(action.Substring(1, 1)) Then
+                    idx = 1
+                Else
+                    idx = 2
+                End If
+                path_S(i).action1 = action.Substring(0, idx)  '
+                path_S(i).Sensor1 = action.Substring(idx) '
 
                 path_S(i).speed1 = CInt(mReader.Item(8)) ' 
                 path_S(i).M2_Point = mReader.Item(9).ToString  ' 
-
-
                 i += 1
-
             Catch ex As Exception
                 MsgBox(ex.Message)
             End Try
@@ -3285,7 +4626,7 @@ Public Class Form1
         mReader.Close()
         Array.Resize(group_path, i)
 
-      
+
 
         Query = "SELECT Shelf_Car_type,max(Shelf_Car_Size)  FROM `shelf_car` where 1 group by Shelf_Car_type "
         sqlCommand.CommandText = Query
@@ -3294,10 +4635,13 @@ Public Class Form1
         ReDim Dijkstra_list(20)
         Dijkstra_list(0).name = ""
         Dijkstra_list(0).CarType = ""
+
         Dijkstra_list(1).name = ""
         Dijkstra_list(1).CarType = "9"
 
-        i = 2
+        Dijkstra_list(2).name = "ALL"
+        Dijkstra_list(2).CarType = "8"
+        i = 3
         While (mReader.Read)
             Dijkstra_list(i).name = mReader.Item(0).ToString  '
             Dijkstra_list(i).CarType = mReader.Item(1).ToString  '
@@ -3320,16 +4664,19 @@ Public Class Form1
         Dim i, j As Integer
 
         Dim path(5000) As Path
+        Dim priwt As Double = 1
         oConn = New MySqlConnection(Mysql_str)
         oConn.Open()
-       
-        sqlCommand.Connection = oConn
-   
 
-        Query = "SELECT A.From_Point,A.To_Point,A.Forward_Sensor,A.Forward_Speed,A.backward_Sensor,A.backward_Speed,B.X, B.Y, C.X, C.Y ,A.FORK_BACK,A.distance	"
+        sqlCommand.Connection = oConn
+        Dim temp As String = path_type
+        If path_type = "ALL" Then
+            temp = ""
+        End If
+        Query = "SELECT A.From_Point,A.To_Point,A.Forward_Sensor,A.Forward_Speed,A.backward_Sensor,A.backward_Speed,B.X, B.Y, C.X, C.Y ,A.FORK_BACK,A.priwt	"
         Query += " FROM `path` A"
         Query += " LEFT JOIN `point` B ON A.`From_Point` = B.Tag_ID"
-        Query += " LEFT JOIN `point` C ON A.`To_Point` = C.Tag_ID where A.path_type like '%" + path_type + "%' and  A.active=1"
+        Query += " LEFT JOIN `point` C ON A.`To_Point` = C.Tag_ID where A.path_type like '%" + temp + "%' and  A.active=1"
 
 
         sqlCommand.CommandText = Query
@@ -3341,18 +4688,20 @@ Public Class Form1
             'path_base(path_i).direction = 0
             path(i).Sensor0 = mReader.Item(2) '
             path(i).speed0 = CInt(mReader.Item(3)) ' 
-            path(i).Fork_back = CInt(mReader.Item(10)) ' FORK ÂèØ‰∏çÂèØÂæåÈÄÄ  
+            path(i).Fork_back = CInt(mReader.Item(10)) ' FORK •i§£•i´·∞h  
             path(i).Sensor1 = mReader.Item(4) '
             path(i).speed1 = CInt(mReader.Item(5))
-
+            If path_type = "ALL" Then
+                path(i).speed0 = 20
+                path(i).speed1 = 20
+            End If
 
             path(i).X1 = CInt(mReader.Item(6)) ' 
             path(i).Y1 = CInt(mReader.Item(7)) ' 
             path(i).X2 = CInt(mReader.Item(8)) ' 
             path(i).Y2 = CInt(mReader.Item(9)) ' 
-
-            path(i).distance = Round(((path(i).X1 - path(i).X2) ^ 2 + (path(i).Y1 - path(i).Y2) ^ 2) ^ 0.5, 0)
-            path(i).offsetdistance = CInt(mReader.Item(11)) ' 
+            priwt = CDbl(mReader.Item(11))
+            path(i).distance = Round((((path(i).X1 - path(i).X2) ^ 2 + (path(i).Y1 - path(i).Y2) ^ 2) ^ 0.5) / priwt, 0)
             i += 1
         End While
         mReader.Close()
@@ -3370,15 +4719,13 @@ Public Class Form1
         For i = 0 To path.Length - 1
             Dim idx1 As Integer = Array.IndexOf(Tag_ID_List, path(i).From_Point)
             Dim idx2 As Integer = Array.IndexOf(Tag_ID_List, path(i).To_Point)
-
-
-
             If (path(i).speed0 > 0) Then
-                L1(idx1, idx2) = CInt(path(i).distance / path(i).speed0)  'Á¥ÄÈåÑË∑ùÈõ¢ Ê≠£Ëµ∞
+                L1(idx1, idx2) = CInt(path(i).distance / path(i).speed0)  '¨ˆø˝∂Z¬˜ •ø®´
+
             End If
 
             If (path(i).speed1 > 0) Then
-                L1(idx2, idx1) = CInt(path(i).distance / path(i).speed1)  'Á¥ÄÈåÑË∑ùÈõ¢ ÈÄÜËµ∞
+                L1(idx2, idx1) = CInt(path(i).distance / path(i).speed1)  '¨ˆø˝∂Z¬˜ ∞f®´
             End If
 
 
@@ -3387,6 +4734,7 @@ Public Class Form1
         oConn.Close()
         oConn.Dispose()
     End Sub
+
     Sub Load_Path_fork_base()
         Dim oConn As MySqlConnection
         Dim sqlCommand As New MySqlCommand
@@ -3400,12 +4748,11 @@ Public Class Form1
 
         Dim idx As Integer = 0
         Dim action As String
-        ReDim path_fork_base(10000)
         oConn = New MySqlConnection(Mysql_str)
         oConn.Open()
         sqlCommand.Connection = oConn
 
-        Query = "SELECT A.From_Point,A.To_Point,A.Forward_Sensor,A.Forward_Speed,A.backward_Sensor,A.backward_Speed,B.X, B.Y, C.X, C.Y ,A.FORK_BACK,A.distance	"
+        Query = "SELECT A.From_Point,A.To_Point,A.Forward_Sensor,A.Forward_Speed,A.backward_Sensor,A.backward_Speed,B.X, B.Y, C.X, C.Y ,A.FORK_BACK	"
         Query += " FROM `path` A"
         Query += " LEFT JOIN `point` B ON A.`From_Point` = B.Tag_ID"
         Query += " LEFT JOIN `point` C ON A.`To_Point` = C.Tag_ID where A.path_type like '%' and  A.active=1 "
@@ -3430,7 +4777,7 @@ Public Class Form1
                 path_fork_base(i).action0 = action.Substring(0, idx)  '
                 path_fork_base(i).Sensor0 = action.Substring(idx)
                 path_fork_base(i).speed0 = CInt(mReader.Item(3)) ' 
-                path_fork_base(i).Fork_back = CInt(mReader.Item(10)) ' FORK ÂèØ‰∏çÂèØÂæåÈÄÄ  
+                path_fork_base(i).Fork_back = CInt(mReader.Item(10)) ' FORK •i§£•i´·∞h  
                 action = mReader.Item(4)
                 If IsNumeric(action.Substring(1, 1)) Then
                     idx = 1
@@ -3450,11 +4797,9 @@ Public Class Form1
                 path_fork_base(i).X2 = CInt(mReader.Item(8)) ' 
                 path_fork_base(i).Y2 = CInt(mReader.Item(9)) ' 
                 path_fork_base(i).distance = Round(((path_fork_base(i).X1 - path_fork_base(i).X2) ^ 2 + (path_fork_base(i).Y1 - path_fork_base(i).Y2) ^ 2) ^ 0.5, 0)
-                path_fork_base(i).offsetdistance = CInt(mReader.Item(11))
-                Path_fork_Dictionary.Add(path_fork_base(i).From_Point * 100000 + path_fork_base(i).To_Point, path_fork_base(i))
                 i += 1
 
-                'ÈÄÜÂú∞ÂúñÁî¢Áîü
+                '∞f¶aπœ≤£•Õ
                 path_fork_base(i).From_Point = CInt(mReader.Item(1)) + 10000 'from
                 path_fork_base(i).To_Point = CInt(mReader.Item(0)) + 10000 'To
                 'path_base(path_i).direction = 0
@@ -3473,9 +4818,8 @@ Public Class Form1
                 ElseIf path_fork_base(i).action0 = "FL" Then
                     path_fork_base(i).action0 = "FR"
                 End If
-                path_fork_base(i).Fork_back = CInt(mReader.Item(10)) ' FORK ÂèØ‰∏çÂèØÂæåÈÄÄ  
+                path_fork_base(i).Fork_back = CInt(mReader.Item(10)) ' FORK •i§£•i´·∞h  
                 action = mReader.Item(4)
-                'Ê±∫ÂÆöÊñπÂêëÈï∑Â∫¶
                 If IsNumeric(action.Substring(1, 1)) Then
                     idx = 1
                 Else
@@ -3500,8 +4844,6 @@ Public Class Form1
                 path_fork_base(i).X2 = CInt(mReader.Item(6)) ' 
                 path_fork_base(i).Y2 = CInt(mReader.Item(7)) ' 
                 path_fork_base(i).distance = Round(((path_fork_base(i).X1 - path_fork_base(i).X2) ^ 2 + (path_fork_base(i).Y1 - path_fork_base(i).Y2) ^ 2) ^ 0.5, 0)
-                path_fork_base(i).offsetdistance = CInt(mReader.Item(11))
-                Path_fork_Dictionary.Add(path_fork_base(i).From_Point * 100000 + path_fork_base(i).To_Point, path_fork_base(i))
                 i += 1
             Catch ex As Exception
                 MsgBox(ex.Message)
@@ -3513,11 +4855,11 @@ Public Class Form1
         Dim ToPoint As Integer = 0
         Dim flag As Integer = 0
         Dim path_fork_base_idx As Integer = 0
-        Dim key As Integer = 0
         Query = "SELECT A.From_Point,A.To_Point,A.Forward_Sensor,A.Forward_Speed,A.backward_Sensor,A.backward_Speed,B.X, B.Y, C.X, C.Y ,A.FORK_BACK	"
         Query += " FROM `path_fork` A"
         Query += " LEFT JOIN `point` B ON A.`From_Point` mod 10000 = B.Tag_ID"
         Query += " LEFT JOIN `point` C ON A.`To_Point` mod 10000 = C.Tag_ID where A.active=1 and not B.X is NULL and not C.X is NULL"
+
 
         sqlCommand.CommandText = Query
         mReader = sqlCommand.ExecuteReader()
@@ -3525,87 +4867,72 @@ Public Class Form1
             FromPoint = CInt(mReader.Item(0)) 'from
             ToPoint = CInt(mReader.Item(1)) 'To
             flag = 0
-
             For ii As Integer = 0 To len - 1
 
                 If (path_fork_base(ii).From_Point = FromPoint And path_fork_base(ii).To_Point = ToPoint) Then
-                    flag = 1 'Ê≠£Ëµ∞ÁöÑË∑ØÁ∑ö
+                    flag = 1
                     path_fork_base_idx = ii
-                    key = FromPoint * 100000 + ToPoint
                     Exit For
-                ElseIf (path_fork_base(ii).From_Point = ToPoint And path_fork_base(ii).To_Point = FromPoint) Then                   
-                    flag = 2 'ÈÄÜÂú∞ÂúñÁöÑË∑ØÁ∑ö
+                ElseIf (path_fork_base(ii).From_Point = ToPoint And path_fork_base(ii).To_Point = FromPoint) Then
+                    flag = 2
                     path_fork_base_idx = ii
-                    key = ToPoint * 100000 + FromPoint
-
                     Exit For
                 End If
             Next
             If flag = 1 Then
-                If CInt(mReader.Item(3)) > 0 Then 'ÂâçÈÄ≤ÈÄüÂ∫¶Ë∂ÖÈÅé0ÊâçË¶ÜËìã
+                If CInt(mReader.Item(3)) > 0 Then '≥t´◊∂WπL0§~¬–ª\
                     action = mReader.Item(2)
-                    'Âà§Êñ∑ÈöúÁ§ôÁâ©ÊòØ1ÂÄãÂ≠óÂÖÉÊàñÊòØ2ÂÄãÂ≠óÂÖÉ
                     If IsNumeric(action.Substring(1, 1)) Then
                         idx = 1
                     Else
                         idx = 2
                     End If
-                    'Âèñ‰ª£ËàäÁöÑË≥áÊñô
                     path_fork_base(path_fork_base_idx).action0 = action.Substring(0, idx)  '
                     path_fork_base(path_fork_base_idx).Sensor0 = action.Substring(idx)
-                    path_fork_base(path_fork_base_idx).speed0 = CInt(mReader.Item(3)) '
 
+
+                    path_fork_base(path_fork_base_idx).speed0 = CInt(mReader.Item(3)) '
                 End If
-                If CInt(mReader.Item(5)) > 0 Then 'ÂæåÈÄÄÈÄüÂ∫¶Ë∂ÖÈÅé0ÊâçË¶ÜËìã
+                If CInt(mReader.Item(5)) > 0 Then '≥t´◊∂WπL0§~¬–ª\
                     action = mReader.Item(4)
-                    'Âà§Êñ∑ÈöúÁ§ôÁâ©ÊòØ1ÂÄãÂ≠óÂÖÉÊàñÊòØ2ÂÄãÂ≠óÂÖÉ
                     If IsNumeric(action.Substring(1, 1)) Then
                         idx = 1
                     Else
                         idx = 2
                     End If
-
-                    'Âèñ‰ª£ËàäÁöÑË≥áÊñô
                     path_fork_base(path_fork_base_idx).action1 = action.Substring(0, idx)  '
                     path_fork_base(path_fork_base_idx).Sensor1 = action.Substring(idx)
-                    path_fork_base(path_fork_base_idx).speed1 = CInt(mReader.Item(5))
 
-                   
+                    path_fork_base(path_fork_base_idx).speed1 = CInt(mReader.Item(5))
                 End If
-                Path_fork_Dictionary(key) = path_fork_base(path_fork_base_idx)
             ElseIf flag = 2 Then
-                'Á¨¶ÂêàÈÄÜÂú∞Âúñ
-                If CInt(mReader.Item(5)) > 0 Then 'ÂæåÈÄÄÈÄüÂ∫¶Ë∂ÖÈÅé0ÊâçË¶ÜËìã
+                '´·∞h≤≈¶X
+                If CInt(mReader.Item(5)) > 0 Then
                     action = mReader.Item(4)
                     If IsNumeric(action.Substring(1, 1)) Then
                         idx = 1
                     Else
                         idx = 2
                     End If
-                    'Âèñ‰ª£ËàäÁöÑË≥áÊñô
                     path_fork_base(path_fork_base_idx).action0 = action.Substring(0, idx)  '
                     path_fork_base(path_fork_base_idx).Sensor0 = action.Substring(idx)
                     path_fork_base(path_fork_base_idx).speed0 = CInt(mReader.Item(5)) '
-
                 End If
 
-                If CInt(mReader.Item(3)) > 0 Then 'ÂâçÈÄ≤ÈÄüÂ∫¶Ë∂ÖÈÅé0ÊâçË¶ÜËìã
+                If CInt(mReader.Item(3)) > 0 Then
                     action = mReader.Item(2)
                     If IsNumeric(action.Substring(1, 1)) Then
                         idx = 1
                     Else
                         idx = 2
                     End If
-                    'Âèñ‰ª£ËàäÁöÑË≥áÊñô
                     path_fork_base(path_fork_base_idx).action1 = action.Substring(0, idx)  '
                     path_fork_base(path_fork_base_idx).Sensor1 = action.Substring(idx)
                     path_fork_base(path_fork_base_idx).speed1 = CInt(mReader.Item(3))
-
                 End If
-                Path_fork_Dictionary(key) = path_fork_base(path_fork_base_idx)
+
 
             Else
-                'ÂéüÂßãÂú∞ÂúñÊ≤íÊúâÔºåÁõ¥Êé•Êñ∞Â¢û
                 path_fork_base(i).From_Point = CInt(mReader.Item(0)) 'from
                 path_fork_base(i).To_Point = CInt(mReader.Item(1)) 'To
                 action = mReader.Item(2)
@@ -3631,8 +4958,6 @@ Public Class Form1
                 path_fork_base(i).X2 = CInt(mReader.Item(8)) ' 
                 path_fork_base(i).Y2 = CInt(mReader.Item(9)) ' 
                 path_fork_base(i).distance = Round(((path_fork_base(i).X1 - path_fork_base(i).X2) ^ 2 + (path_fork_base(i).Y1 - path_fork_base(i).Y2) ^ 2) ^ 0.5, 0)
-                Path_fork_Dictionary.Add(path_fork_base(i).From_Point * 100000 + path_fork_base(i).To_Point, path_fork_base(i))
-
                 i += 1
             End If
 
@@ -3642,7 +4967,7 @@ Public Class Form1
         Array.Resize(path_fork_base, i_cnt)
 
 
-       
+
         oConn.Close()
         oConn.Dispose()
     End Sub
@@ -3665,7 +4990,7 @@ Public Class Form1
         oConn.Open()
         sqlCommand.Connection = oConn
 
-        Query = "SELECT A.From_Point,A.To_Point,A.Forward_Sensor,A.Forward_Speed,A.backward_Sensor,A.backward_Speed,B.X, B.Y, C.X, C.Y ,A.FORK_BACK,A.distance	"
+        Query = "SELECT A.From_Point,A.To_Point,A.Forward_Sensor,A.Forward_Speed,A.backward_Sensor,A.backward_Speed,B.X, B.Y, C.X, C.Y ,A.FORK_BACK	"
         Query += " FROM `path` A"
         Query += " LEFT JOIN `point` B ON A.`From_Point` = B.Tag_ID"
         Query += " LEFT JOIN `point` C ON A.`To_Point` = C.Tag_ID where A.path_type like '%" + path_type + "%' and  A.active=1 "
@@ -3687,7 +5012,7 @@ Public Class Form1
             path(i).action0 = action.Substring(0, idx)  '
             path(i).Sensor0 = action.Substring(idx)
             path(i).speed0 = CInt(mReader.Item(3)) ' 
-            path(i).Fork_back = CInt(mReader.Item(10)) ' FORK ÂèØ‰∏çÂèØÂæåÈÄÄ  
+            path(i).Fork_back = CInt(mReader.Item(10)) ' FORK •i§£•i´·∞h  
             action = mReader.Item(4)
             If IsNumeric(action.Substring(1, 1)) Then
                 idx = 1
@@ -3707,10 +5032,9 @@ Public Class Form1
             path(i).X2 = CInt(mReader.Item(8)) ' 
             path(i).Y2 = CInt(mReader.Item(9)) ' 
             path(i).distance = Round(((path(i).X1 - path(i).X2) ^ 2 + (path(i).Y1 - path(i).Y2) ^ 2) ^ 0.5, 0)
-            path(i).offsetdistance = CInt(mReader.Item(11))
             i += 1
 
-            'ÈÄÜÂú∞ÂúñÁî¢Áîü
+            '∞f¶aπœ≤£•Õ
             path(i).From_Point = CInt(mReader.Item(1)) + 10000 'from
             path(i).To_Point = CInt(mReader.Item(0)) + 10000 'To
             'path_base(path_i).direction = 0
@@ -3729,7 +5053,7 @@ Public Class Form1
             ElseIf path(i).action0 = "FL" Then
                 path(i).action0 = "FR"
             End If
-            path(i).Fork_back = CInt(mReader.Item(10)) ' FORK ÂèØ‰∏çÂèØÂæåÈÄÄ  
+            path(i).Fork_back = CInt(mReader.Item(10)) ' FORK •i§£•i´·∞h  
             action = mReader.Item(4)
             If IsNumeric(action.Substring(1, 1)) Then
                 idx = 1
@@ -3755,8 +5079,6 @@ Public Class Form1
             path(i).X2 = CInt(mReader.Item(6)) ' 
             path(i).Y2 = CInt(mReader.Item(7)) ' 
             path(i).distance = Round(((path(i).X1 - path(i).X2) ^ 2 + (path(i).Y1 - path(i).Y2) ^ 2) ^ 0.5, 0)
-            path(i).offsetdistance = CInt(mReader.Item(11))
-
             i += 1
 
         End While
@@ -3811,7 +5133,7 @@ Public Class Form1
                     path(path_idx).Sensor1 = action.Substring(idx)
                     path(path_idx).speed1 = CInt(mReader.Item(5))
                 End If
-               
+
             ElseIf flag = 2 Then
 
                 If CInt(mReader.Item(5)) > 0 Then
@@ -3836,34 +5158,35 @@ Public Class Form1
                     path(path_idx).Sensor1 = action.Substring(idx)
                     path(path_idx).speed1 = CInt(mReader.Item(3))
                 End If
-                
+
             Else
-            path(i).From_Point = CInt(mReader.Item(0)) 'from
-            path(i).To_Point = CInt(mReader.Item(1)) 'To
-            action = mReader.Item(2)
-            If IsNumeric(action.Substring(1, 1)) Then
-                idx = 1
-            Else
-                idx = 2
-            End If
-            path(i).action0 = action.Substring(0, idx)  '
-            path(i).Sensor0 = action.Substring(idx)
-            path(i).speed0 = CInt(mReader.Item(3)) '
-            action = mReader.Item(4)
-            If IsNumeric(action.Substring(1, 1)) Then
-                idx = 1
-            Else
-                idx = 2
-            End If
-            path(i).action1 = action.Substring(0, idx)  '
-            path(i).Sensor1 = action.Substring(idx)
-            path(i).speed1 = CInt(mReader.Item(5))
-            path(i).X1 = CInt(mReader.Item(6)) ' 
-            path(i).Y1 = CInt(mReader.Item(7)) ' 
-            path(i).X2 = CInt(mReader.Item(8)) ' 
-            path(i).Y2 = CInt(mReader.Item(9)) ' 
-            path(i).distance = Round(((path(i).X1 - path(i).X2) ^ 2 + (path(i).Y1 - path(i).Y2) ^ 2) ^ 0.5, 0)
-            i += 1
+                path(i).From_Point = CInt(mReader.Item(0)) 'from
+                path(i).To_Point = CInt(mReader.Item(1)) 'To
+                action = mReader.Item(2)
+                If IsNumeric(action.Substring(1, 1)) Then
+                    idx = 1
+                Else
+                    idx = 2
+                End If
+                path(i).action0 = action.Substring(0, idx)  '
+                path(i).Sensor0 = action.Substring(idx)
+                path(i).speed0 = CInt(mReader.Item(3)) '
+                action = mReader.Item(4)
+                If IsNumeric(action.Substring(1, 1)) Then
+                    idx = 1
+                Else
+                    idx = 2
+                End If
+                path(i).action1 = action.Substring(0, idx)  '
+                path(i).Sensor1 = action.Substring(idx)
+                path(i).speed1 = CInt(mReader.Item(5))
+                path(i).X1 = CInt(mReader.Item(6)) ' 
+                path(i).Y1 = CInt(mReader.Item(7)) ' 
+                path(i).X2 = CInt(mReader.Item(8)) ' 
+                path(i).Y2 = CInt(mReader.Item(9)) '
+
+                path(i).distance = Round(((path(i).X1 - path(i).X2) ^ 2 + (path(i).Y1 - path(i).Y2) ^ 2) ^ 0.5, 0)
+                i += 1
             End If
 
         End While
@@ -3886,16 +5209,16 @@ Public Class Form1
 
 
             For i = 0 To path.Length - 1
-                'ÊêúÂ∞ã
+                '∑j¥M
                 Dim idx1 As Integer = 0
                 Dim idx2 As Integer = 0
                 idx1 = Array.IndexOf(tag_id, path(i).From_Point)
                 idx2 = Array.IndexOf(tag_id, path(i).To_Point)
                 If (path(i).speed0 > 0) Then
-                    L1(idx1, idx2) = CInt(path(i).distance / path(i).speed0)  'Á¥ÄÈåÑË∑ùÈõ¢ Ê≠£Ëµ∞
+                    L1(idx1, idx2) = CInt(path(i).distance / path(i).speed0)  '¨ˆø˝∂Z¬˜ •ø®´
                 End If
                 If (path(i).speed1 > 0) Then
-                    L1(idx2, idx1) = CInt(path(i).distance / path(i).speed1) 'Á¥ÄÈåÑË∑ùÈõ¢ ÈÄÜËµ∞
+                    L1(idx2, idx1) = CInt(path(i).distance / path(i).speed1) '¨ˆø˝∂Z¬˜ ∞f®´
                 End If
             Next
         Catch ex As Exception
@@ -3908,7 +5231,7 @@ Public Class Form1
         'Load_Path("", Tag_ID_List)
     End Sub
 
-    Private Sub Button20_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button20.Click
+    Private Sub Button20_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles SendBtn.Click
         Dim oConn As MySqlConnection
         Dim sqlCommand As New MySqlCommand
         Dim ans As Integer = 0
@@ -3917,26 +5240,30 @@ Public Class Form1
         sqlCommand.Connection = oConn
 
         Try
-            If Not ext_cmd_txt.Text = "" Then
-                Dim Query As String = "INSERT INTO `agv_cmd_list` ( AGVNo,`CmdFrom`, `CmdTo`, `Pri_Wt`,RequestTime, `Requestor`,ext_cmd) VALUES ('" + txtCar.Text + "','" + Me.From_cb.Text + "', '" + Me.To_cb.Text + "', '50',now(), 'AGVC','" + ext_cmd_txt.Text + "');"
-                sqlCommand.CommandText = Query
-                ans = sqlCommand.ExecuteNonQuery()
-            ElseIf (CInt(Me.From_cb.Text)) < 10 Then
-                Dim Query As String = "INSERT INTO `agv_cmd_list` ( AGVNo,`CmdFrom`, `CmdTo`, `Pri_Wt`,RequestTime, `Requestor`) VALUES ('" + txtCar.Text + "','" + Me.From_cb.Text + "', '" + Me.To_cb.Text + "', '50',now(), 'AGVC');"
-                sqlCommand.CommandText = Query
-                ans = sqlCommand.ExecuteNonQuery()
+            'If Not rolldateTxt.Text = "" Then
+            Dim Query As String = "INSERT INTO `agv_cmd_list` ( AGVNo,`CmdFrom`, `CmdTo`, `Pri_Wt`,RequestTime, `Requestor`,RollData,ext_cmd) VALUES ('" + txtCar.Text + "','" + Me.From_cb.Text + "', '" + Me.To_cb.Text + "', '50',now(), 'AGVC','','" + rolldateTxt.Text + "');"
+            sqlCommand.CommandText = Query
+            ans = sqlCommand.ExecuteNonQuery()
+            'ElseIf Not ext_cmd_txt.Text = "" Then
+            '    Dim Query As String = "INSERT INTO `agv_cmd_list` ( AGVNo,`CmdFrom`, `CmdTo`, `Pri_Wt`,RequestTime, `Requestor`,ext_cmd) VALUES ('" + txtCar.Text + "','" + Me.From_cb.Text + "', '" + Me.To_cb.Text + "', '50',now(), 'AGVC','" + ext_cmd_txt.Text + "');"
+            '    sqlCommand.CommandText = Query
+            '    ans = sqlCommand.ExecuteNonQuery()
+            'ElseIf (CInt(Me.From_cb.Text)) < 10 Then
+            '    Dim Query As String = "INSERT INTO `agv_cmd_list` ( AGVNo,`CmdFrom`, `CmdTo`, `Pri_Wt`,RequestTime, `Requestor`) VALUES ('" + txtCar.Text + "','" + Me.From_cb.Text + "', '" + Me.To_cb.Text + "', '50',now(), 'AGVC');"
+            '    sqlCommand.CommandText = Query
+            '    ans = sqlCommand.ExecuteNonQuery()
 
-            Else
-                Dim Query As String = "insert into  `agv_cmd_list`(`AGVNo`,`CmdFrom`,`CmdTo`,`Pri_Wt`,`Requestor`,`Shelf_Car_No`,`Shelf_Car_type`,`Shelf_Car_Size`) select '" + txtCar.Text + "' as AGVNo,'" + Me.From_cb.Text + "','" + Me.To_cb.Text + "',50,'AGVC',Shelf_Car_No,`Shelf_Car_type`,`Shelf_Car_Size` from `shelf_car` where LOCATION='" + Me.From_cb.Text + "' "
-                sqlCommand.CommandText = Query
-                ans = sqlCommand.ExecuteNonQuery()
-            End If
+            'Else
+            '    Dim Query As String = "insert into  `agv_cmd_list`(`AGVNo`,`CmdFrom`,`CmdTo`,`Pri_Wt`,`Requestor`,`Shelf_Car_No`,`Shelf_Car_type`,`Shelf_Car_Size`) select '" + txtCar.Text + "' as AGVNo,'" + Me.From_cb.Text + "','" + Me.To_cb.Text + "',50,'AGVC',Shelf_Car_No,`Shelf_Car_type`,`Shelf_Car_Size` from `shelf_car` where LOCATION='" + Me.From_cb.Text + "' "
+            '    sqlCommand.CommandText = Query
+            '    ans = sqlCommand.ExecuteNonQuery()
+            '  End If
 
         Catch ex As Exception
-            MsgBox("Ê¥æË≤®Â§±Êïó" + ex.Message)
+            MsgBox("¨£≥f•¢±—" + ex.Message)
         End Try
         If (Not ans = 1) Then
-            MsgBox("Ê¥æË≤®Â§±Êïó:‰æÜÊ∫êÁÑ°Êû∂Âè∞ÊàñÁõÆÁöÑÁ´ØÊúâÊû∂Âè∞")
+            MsgBox("¨£≥f•¢±—")
         End If
         oConn.Close()
         oConn.Dispose()
@@ -3949,31 +5276,31 @@ Public Class Form1
 
             Car(view_car_idx).step_i = 903
         Else
-            MsgBox("ÊúâÂëΩ‰ª§Âü∑Ë°å‰∏≠")
+            MsgBox("¶≥©R•O∞ı¶Ê§§")
         End If
     End Sub
 
 
     Private Sub Button6_Click_1(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button6.Click
-        'ÊâãÂãïÂâçÈÄ≤
+        '§‚∞ ´e∂i
         If Car(view_car_idx).step_i = 999 Then
             Car(view_car_idx).step_i = 21
         Else
-            MsgBox("ÊúâÂëΩ‰ª§Âü∑Ë°å‰∏≠")
+            MsgBox("¶≥©R•O∞ı¶Ê§§")
         End If
     End Sub
 
     Private Sub Button3_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button3.Click
-        'ÊâãÂãïÂæåÈÄÄ
+        '§‚∞ ´·∞h
         If Car(view_car_idx).step_i = 999 Then
             Car(view_car_idx).step_i = 31
         Else
-            MsgBox("ÊúâÂëΩ‰ª§Âü∑Ë°å‰∏≠")
+            MsgBox("¶≥©R•O∞ı¶Ê§§")
         End If
     End Sub
 
     Private Sub Button21_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button21.Click
-        'Ëá™ÂãïËΩâÊâãÂãï
+        '¶€∞ ¬‡§‚∞ 
         If Car(view_car_idx).step_i = 999 Then
             Car(view_car_idx).step_i = 110
         End If
@@ -4001,44 +5328,160 @@ Public Class Form1
     Private Sub CheckBox3_CheckedChanged(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles CheckBox3.CheckedChanged
         Me.PictureBox1.Invalidate()
     End Sub
+    Dim view_shelf_idx As Integer = 0
+    Dim view_charger_idx As Integer = 0
+    Private Sub PictureBox1_MouseClick(ByVal sender As Object, ByVal e As System.Windows.Forms.MouseEventArgs) Handles PictureBox1.MouseClick
+        Dim shelf_size As Integer = 55
+        For i As Integer = 0 To Car.Length - 1
+            If e.X > CInt(AGVratio * Car(i).AXIS_X) - map_offset_X - 10 And e.X < CInt(AGVratio * Car(i).AXIS_X) - map_offset_X + 10 And e.Y > CInt(AGVratio * Car(i).AXIS_Y) - map_offset_Y - 10 And e.Y < CInt(AGVratio * Car(i).AXIS_Y) - map_offset_Y + 20 Then
+
+                view_car_idx = i
+                Button16.Text = "SetPoint"
+                txtCar.SelectedIndex = i
+                showType = 1
+                agv_info.Show()
+
+                Me.pic_close.Show()
+                txtCar.Show()
+                From_cb.Show()
+                To_cb.Show()
+                rolldateTxt.Show()
+                SendBtn.Show()
+                From_cb_TextChanged(sender, e)
+                agv_info.Invalidate()
+                Exit Sub
+            End If
+        Next
+        For i As Integer = 0 To comQGWrapper.EqPort.Length - 1
+            If e.X > CInt(AGVratio * comQGWrapper.EqPort(i).AXIS_X) - map_offset_X And e.X < CInt(AGVratio * comQGWrapper.EqPort(i).AXIS_X) - map_offset_X + CInt(AGVratio * shelf_size) And e.Y > CInt(AGVratio * comQGWrapper.EqPort(i).AXIS_Y) - map_offset_Y And e.Y < CInt(AGVratio * comQGWrapper.EqPort(i).AXIS_Y) - map_offset_Y + CInt(AGVratio * shelf_size) Then
+                view_eq_idx = i
+                showType = 2
+                agv_info.Show()
+                Me.pic_close.Show()
+                rolldateTxt.Text = ""
+                'From_cb.Text = comQGWrapper.EqPort(i).tag_id
+                From_cb_TextChanged(sender, e)
+                Dim idx As Integer = -1
+                idx = comQGWrapper.CST_SearchByLoc(comQGWrapper.EqPort(i).PortID)
+                If idx > -1 Then
+                    From_cb.Text = comQGWrapper.EqPort(i).tag_id
+                Else
+                    To_cb.Text = comQGWrapper.EqPort(i).tag_id
+                End If
+
+                'Button16.Text = "Lock"
+                'txtCar.Hide()
+                ' From_cb.Hide()
+                'To_cb.Hide()
+                'rolldateTxt.Hide()
+
+                'SendBtn.Hide()
+                agv_info.Invalidate()
+                Exit Sub
+
+            End If
+        Next
+        For i As Integer = 0 To comQGWrapper.ShelfData.Length - 1
+            If e.X > CInt(AGVratio * comQGWrapper.ShelfData(i).AXIS_X) - map_offset_X And e.X < CInt(AGVratio * comQGWrapper.ShelfData(i).AXIS_X) - map_offset_X + CInt(AGVratio * shelf_size) And e.Y > CInt(AGVratio * comQGWrapper.ShelfData(i).AXIS_Y) - map_offset_Y And e.Y < CInt(AGVratio * comQGWrapper.ShelfData(i).AXIS_Y) + CInt(AGVratio * shelf_size) - map_offset_Y Then
+                view_shelf_idx = i
+                showType = 3
+                agv_info.Show()
+                Me.pic_close.Show()
+                rolldateTxt.Text = ""
+                Dim idx As Integer = -1
+                idx = comQGWrapper.CST_SearchByLoc(comQGWrapper.ShelfData(i).Shelf_Loc)
+                If idx > -1 Then
+                    From_cb.Text = comQGWrapper.ShelfData(i).tag_id
+                Else
+                    To_cb.Text = comQGWrapper.ShelfData(i).tag_id
+                End If
+                From_cb_TextChanged(sender, e)
+                If comQGWrapper.ShelfData(i).Shelf_Status = "X" Then
+                    Button16.Text = "Unlock"
+                Else
+                    Button16.Text = "Lock"
+                End If
+                ' txtCar.Hide()
+                ' From_cb.Hide()
+                ' To_cb.Hide()
+                ' SendBtn.Hide()
+                ' rolldateTxt.Hide()
+                agv_info.Invalidate()
+                Exit Sub
+            End If
+        Next
+        For i As Integer = 0 To ChargerClient.Length - 1
+            If e.X > CInt(AGVratio * ChargerClient(i).AXIS_X) - map_offset_X And e.X < CInt(AGVratio * ChargerClient(i).AXIS_X) + CInt(AGVratio * 150) - map_offset_X And e.Y > CInt(AGVratio * ChargerClient(i).AXIS_Y) - map_offset_Y And e.Y < CInt(AGVratio * ChargerClient(i).AXIS_Y) + CInt(AGVratio * 150) - map_offset_Y Then
+                view_charger_idx = i
+                showType = 4
+                agv_info.Show()
+                Me.pic_close.Show()
+                rolldateTxt.Text = ""
+
+                agv_info.Invalidate()
+                Button16.Text = "Reset"
+                Exit Sub
+
+            End If
+        Next
+
+    End Sub
+
+    Dim cst_img As Image = Image.FromFile("CST.png")
+    Dim agv_img As Image = Image.FromFile("AGV.png")
+
+    Dim AgvErr As Image = Image.FromFile("AGV_ERR.png")
+    Dim AgvOffline As Image = Image.FromFile("AGV_Offline.png")
+    Dim AgvManual As Image = Image.FromFile("AGV_Manual.png")
+    Dim AgvRun As Image = Image.FromFile("AGV_RUN.png")
+    Dim AgvIdle As Image = Image.FromFile("AGV_Idle.png")
+    Dim Agvaction As Image = Image.FromFile("AGV_ACTION.png")
     Dim ChargerImg As Image = Image.FromFile("charger.png")
+
     Private Sub PictureBox1_Paint(ByVal sender As Object, ByVal e As System.Windows.Forms.PaintEventArgs) Handles PictureBox1.Paint
         Dim g As Graphics = e.Graphics
-        Dim p As Pen = New Pen(Color.Yellow, 2)
-        Dim r As Pen = New Pen(Color.Red, 2)
+        Dim p As Pen = New Pen(Color.FromArgb(0, 78, 97), 2)
+        Dim r As Pen = New Pen(Color.Red)
         Dim g_pen As Pen = New Pen(Color.Green, 2)
+        Dim g_b As SolidBrush = New SolidBrush(Color.CadetBlue)
         'Dim G_Pen As Brush = New Brush()
         Dim drawFormat As New StringFormat
-        Dim img As Image = Image.FromFile("shelf.png")
-        offset_x = 0
+        Dim shelf_size As Integer = 50
+
+        offset_x = map_offset_X
         Try
-            offset_y = CInt(Floor_Map.Text)
+            ' offset_y = CInt(Floor_Map.Text) * AGVratio
+            offset_y = map_offset_Y
         Catch ex As Exception
             offset_y = 0
-            Floor_Map.Text = "0"
+
         End Try
+        Dim rect As New Rectangle(10, 10, 30, 30)
+        Dim toLoc(ListView1.Items.Count - 1) As String
+        For i As Integer = 0 To ListView1.Items.Count - 1
+            toLoc(i) = ListView1.Items(i).SubItems(3).Text
+        Next
+
+
 
 
 
 
         drawFormat.Alignment = StringAlignment.Center
         For i As Integer = 0 To path_base.Length - 1
-            g.DrawLine(p, path_base(i).X1 - offset_x, path_base(i).Y1 - offset_y, path_base(i).X2 - offset_x, path_base(i).Y2 - offset_y)
+            g.DrawLine(p, CInt(path_base(i).X1 * AGVratio) - offset_x, CInt(path_base(i).Y1 * AGVratio) - offset_y, CInt(path_base(i).X2 * AGVratio) - offset_x, CInt(path_base(i).Y2 * AGVratio) - offset_y)
             ' dfh()
         Next
 
-        For j As Integer = 0 To car_no
-
-
+        For j As Integer = 0 To car_no - 1
             Try
-
 
                 If (Not Car(j).subcmd = "") Then
                     'Car(j).subcmd = Car(j).subcmd.Remove(0, Car(j).subcmd.IndexOf(Car(j).get_tagId.ToString + ","))
                     Dim subcmd_list() As String = Car(j).subcmd.Split(",")
                     For i As Integer = 0 To subcmd_list.Length - 1
-                        If subcmd_list(i).Length > 4 Then
-                            subcmd_list(i) = subcmd_list(i).Substring(1)
+                        If CInt(subcmd_list(i)) > 10000 Then
+                            subcmd_list(i) = (CInt(subcmd_list(i)) Mod 10000).ToString
                         End If
                     Next
 
@@ -4046,59 +5489,298 @@ Public Class Form1
                     For i As Integer = 0 To path_base.Length - 1
                         For k As Integer = 0 To subcmd_list.Length - 2
                             If path_base(i).From_Point = CInt(subcmd_list(k)) And path_base(i).To_Point = CInt(subcmd_list(k + 1)) Then
-                                g.DrawLine(g_pen, path_base(i).X1 - offset_x, path_base(i).Y1 - offset_y, path_base(i).X2 - offset_x, path_base(i).Y2 - offset_y)
+                                g.DrawLine(g_pen, CInt(path_base(i).X1 * AGVratio) - offset_x, CInt(path_base(i).Y1 * AGVratio) - offset_y, CInt(path_base(i).X2 * AGVratio) - offset_x, CInt(path_base(i).Y2 * AGVratio) - offset_y)
                             ElseIf path_base(i).To_Point = CInt(subcmd_list(k)) And path_base(i).From_Point = CInt(subcmd_list(k + 1)) Then
-                                g.DrawLine(r, path_base(i).X1 - offset_x, path_base(i).Y1 - offset_y, path_base(i).X2 - offset_x, path_base(i).Y2 - offset_y)
+                                g.DrawLine(r, CInt(path_base(i).X1 * AGVratio) - offset_x, CInt(path_base(i).Y1 * AGVratio) - offset_y, CInt(path_base(i).X2 * AGVratio) - offset_x, CInt(path_base(i).Y2 * AGVratio) - offset_y)
                             End If
                         Next
 
                     Next
 
+                    For i As Integer = 0 To subcmd_list.Length - 1
+                        Dim idx As Integer = Tag_Point_ByTagid(Tag_point_list, CInt(subcmd_list(i)))
+                        Dim idx2 As Integer
+                        If i = subcmd_list.Length - 1 Then
+                            idx2 = idx
+                        Else
+                            idx2 = Tag_Point_ByTagid(Tag_point_list, CInt(subcmd_list(i + 1)))
+                        End If
+
+                        If idx > -1 And idx2 > -1 Then
+                            If Tag_point_list(idx).th = Tag_point_list(idx2).th Then
+                                If Tag_point_list(idx).th = 0 Then
+                                    rect = New Rectangle(CInt((Tag_point_list(idx).X - Car(j).width / 2) * AGVratio) - offset_x, CInt((Tag_point_list(idx).Y - Car(j).height / 2) * AGVratio) - offset_y, CInt(AGVratio * Car(j).width), CInt(AGVratio * Car(j).height))
+                                Else
+                                    rect = New Rectangle(CInt((Tag_point_list(idx).X - Car(j).height / 2) * AGVratio) - offset_x, CInt((Tag_point_list(idx).Y - Car(j).width / 2) * AGVratio) - offset_y, CInt(AGVratio * Car(j).height), CInt(AGVratio * Car(j).width))
+                                End If
+                            Else
+                                Dim MaxVal As Integer = Math.Max(Car(j).width, Car(j).height) - 70
+                                rect = New Rectangle(CInt((Tag_point_list(idx).X - MaxVal / 2) * AGVratio) - offset_x, CInt((Tag_point_list(idx).Y - MaxVal / 2) * AGVratio) - offset_y, CInt(AGVratio * MaxVal), CInt(AGVratio * MaxVal))
+                            End If
+                            If j = 0 Then
+                                e.Graphics.DrawRectangle(New Pen(Color.Red, 1), rect)
+                            ElseIf j = 1 Then
+                                e.Graphics.DrawRectangle(New Pen(Color.Orange, 1), rect)
+                            ElseIf j = 2 Then
+                                e.Graphics.DrawRectangle(New Pen(Color.Yellow, 1), rect)
+                            ElseIf j = 3 Then
+                                e.Graphics.DrawRectangle(New Pen(Color.Green, 1), rect)
+                            ElseIf j = 4 Then
+                                e.Graphics.DrawRectangle(New Pen(Color.Blue, 1), rect)
+                            ElseIf j = 5 Then
+                                e.Graphics.DrawRectangle(New Pen(Color.Indigo, 1), rect)
+                            ElseIf j = 6 Then
+                                e.Graphics.DrawRectangle(New Pen(Color.Purple, 1), rect)
+                            Else
+                                e.Graphics.DrawRectangle(New Pen(Color.Green, 1), rect)
+                            End If
+
+                        End If
+                    Next
+
+
                 End If
             Catch ex As Exception
                 settext(ex.Message)
             End Try
+
         Next
 
 
 
         For i As Integer = 0 To Tag_point_list.Length - 1
 
-            If CheckBox3.Checked = True Then
-                If Not Tag_point_list(i).name = "NA" Then
-                    g.DrawString(Tag_point_list(i).name.ToString, New Font("Tahoma", 8), Brushes.Black, Tag_point_list(i).X - offset_x, Tag_point_list(i).Y - offset_y)
+            If Array.IndexOf(AllBlockPointList, Tag_point_list(i).TagId.ToString) > -1 Then
+                rect = New Rectangle(CInt(Tag_point_list(i).X * AGVratio) - 5 - offset_x, CInt(AGVratio * Tag_point_list(i).Y) - 5 - offset_y, 10, 10)
+                e.Graphics.FillEllipse(New SolidBrush(Color.Red), rect)
+                e.Graphics.FillRectangle(New SolidBrush(Color.White), CInt(AGVratio * Tag_point_list(i).X) - 3 - offset_x, CInt(AGVratio * Tag_point_list(i).Y) - 2 - offset_y, 6, 3)
+            ElseIf In_String(Car(view_car_idx).Block_Point, Tag_point_list(i).TagId.ToString) Then
+                rect = New Rectangle(CInt(Tag_point_list(i).X * AGVratio) - 5 - offset_x, CInt(AGVratio * Tag_point_list(i).Y) - 5 - offset_y, 10, 10)
+                e.Graphics.FillEllipse(New SolidBrush(Color.Orange), rect)
+                e.Graphics.FillRectangle(New SolidBrush(Color.White), CInt(AGVratio * Tag_point_list(i).X) - 3 - offset_x, CInt(AGVratio * Tag_point_list(i).Y) - 2 - offset_y, 6, 3)
+            ElseIf CheckBox3.Checked = True Then
+
+            Else
+
+                g.DrawString(Tag_point_list(i).TagId.ToString, New Font("Gill Sans MT", 8), Brushes.Black, CInt(AGVratio * Tag_point_list(i).X) - offset_x, CInt(AGVratio * Tag_point_list(i).Y) - offset_y)
+            End If
+
+        Next
+        'shelf 
+        For i As Integer = 0 To comQGWrapper.ShelfData.Length - 1
+            rect = New Rectangle(CInt(comQGWrapper.ShelfData(i).AXIS_X * AGVratio) - offset_x, CInt(comQGWrapper.ShelfData(i).AXIS_Y * AGVratio) - offset_y, CInt(AGVratio * shelf_size), CInt(AGVratio * shelf_size))
+
+
+            If comQGWrapper.ShelfData(i).Shelf_Status = "X" Then
+                e.Graphics.FillRectangle(New SolidBrush(Color.Brown), rect)
+            ElseIf Array.IndexOf(toLoc, comQGWrapper.ShelfData(i).tag_id.ToString) > -1 Then
+                e.Graphics.FillRectangle(New SolidBrush(Color.FromArgb(0, 255, 0)), rect)
+            ElseIf comQGWrapper.ShelfData(i).Shelf_Status = "B" Then
+            e.Graphics.FillRectangle(New SolidBrush(Color.Orange), rect)
+            ElseIf comQGWrapper.ShelfData(i).Zone_Name.EndsWith("04") Then
+            e.Graphics.FillRectangle(New SolidBrush(Color.WhiteSmoke), rect)
+            Else
+            e.Graphics.FillRectangle(New SolidBrush(Color.LightCyan), rect)
+            End If
+
+            e.Graphics.DrawRectangle(New Pen(Color.Black, 1), rect)
+            If Not comQGWrapper.ShelfData(i).CarrierID = "" Then
+                Dim idx As Integer = -1
+
+                idx = comQGWrapper.CST_SearchByLoc(comQGWrapper.ShelfData(i).Shelf_Loc)
+                If idx > -1 Then
+                    g.DrawImage(cst_img, CInt(comQGWrapper.ShelfData(i).AXIS_X * AGVratio) - offset_x, CInt(comQGWrapper.ShelfData(i).AXIS_Y * AGVratio) - offset_y, CInt(AGVratio * shelf_size), CInt(AGVratio * shelf_size))
+
+                    If comQGWrapper.CST(idx).CarrierID.StartsWith("UNKNOWN") Then
+                        g.DrawString("?", New Font("Tahoma", 10), Brushes.Red, CInt(comQGWrapper.ShelfData(i).AXIS_X * AGVratio) - offset_x, CInt(comQGWrapper.ShelfData(i).AXIS_Y * AGVratio) - offset_y)
+                    End If
+                Else
+                    'comQGWrapper.ShelfData(i).CarrierID = ""
                 End If
 
-            Else
-                g.DrawString(Tag_point_list(i).TagId.ToString, New Font("Tahoma", 8), Brushes.Black, Tag_point_list(i).X - offset_x, Tag_point_list(i).Y - offset_y)
+
             End If
 
         Next
-        Dim AGVratio As Double = 0.15
-        Dim myBrushR As New System.Drawing.SolidBrush(System.Drawing.Color.Red)
-        Dim myBrushG As New System.Drawing.SolidBrush(System.Drawing.Color.Green)
-        Dim myBrushB As New System.Drawing.SolidBrush(System.Drawing.Color.Blue)
+        For i As Integer = 0 To lablelist.Length - 1
+            e.Graphics.DrawString(lablelist(i).Txt, New Font("Gill Sans MT", CInt(AGVratio * lablelist(i).isize)), Brushes.Black, CInt(AGVratio * (lablelist(i).X + 25)) - offset_x, CInt(AGVratio * (lablelist(i).Y - 50)) - offset_y)
+
+
+        Next
+
+        For i As Integer = 0 To comQGWrapper.EqPort.Length - 1
+            rect = New Rectangle(CInt(comQGWrapper.EqPort(i).AXIS_X * AGVratio) - offset_x, CInt(comQGWrapper.EqPort(i).AXIS_Y * AGVratio) - offset_y, CInt(AGVratio * shelf_size), CInt(AGVratio * shelf_size))
+            If comQGWrapper.EqPort(i).LoadAvail = 0 Then
+                e.Graphics.FillRectangle(New SolidBrush(Color.Green), rect)
+            ElseIf comQGWrapper.EqPort(i).UnLoadAvail = 0 Then
+                e.Graphics.FillRectangle(New SolidBrush(Color.MediumBlue), rect)
+            ElseIf comQGWrapper.EqPort(i).ONLINE = 1 Then
+                e.Graphics.FillRectangle(New SolidBrush(Color.LightGreen), rect)
+            ElseIf comQGWrapper.EqPort(i).ERR = 1 Then
+                e.Graphics.FillRectangle(New SolidBrush(Color.Red), rect)
+            Else
+                e.Graphics.FillRectangle(New SolidBrush(Color.Gray), rect)
+            End If
+
+
+            e.Graphics.DrawRectangle(New Pen(Color.Black, 1), rect)
+
+
+
+            Dim idx As Integer = comQGWrapper.CST_SearchByLoc(comQGWrapper.EqPort(i).PortID)
+
+            If idx >= 0 Then
+                If comQGWrapper.CST(idx).CarrierLoc = comQGWrapper.EqPort(i).PortID Then
+                    g.DrawImage(cst_img, CInt(AGVratio * comQGWrapper.EqPort(i).AXIS_X) - offset_x, CInt(AGVratio * comQGWrapper.EqPort(i).AXIS_Y) - offset_y, CInt(AGVratio * shelf_size), CInt(AGVratio * shelf_size))
+                End If
+
+            End If
+
+
+        Next
+
         For i As Integer = 0 To ChargerClient.Length - 1
-            If ChargerClient(i).HoldingResponse(19) > 0 Then
-                e.Graphics.FillRectangle(myBrushR, CInt(ChargerClient(i).AXIS_X) - offset_x, CInt(ChargerClient(i).AXIS_Y) - offset_y, CInt(AGVratio * 150), CInt(AGVratio * 150))
 
-            ElseIf ((ChargerClient(i).HoldingResponse(21) << 16) + ChargerClient(i).HoldingResponse(20)) > 0 Then
-                '
-                e.Graphics.FillRectangle(myBrushB, CInt(ChargerClient(i).AXIS_X) - offset_x, CInt(ChargerClient(i).AXIS_Y) - offset_y, CInt(AGVratio * 150), CInt(AGVratio * 150))
+            g.DrawImage(ChargerImg, CInt(ChargerClient(i).AXIS_X * AGVratio) - offset_x, CInt(ChargerClient(i).AXIS_Y * AGVratio) - offset_y, CInt(AGVratio * 150), CInt(AGVratio * 150))
+        Next
+        For i As Integer = 0 To car_no - 1
+            ' If Car(i).flag = True Then
+            'If Car(i).get_tagId() > 0 Then
+            'If Car(i).device_status(23) > 0 Then
+            If Car(i).device_status(23) = 0 And Car(i).device_status(24) = 0 Then
+                For j As Integer = 0 To Tag_point_list.Length - 1
+                    If Car(i).get_tagId = Tag_point_list(j).TagId Then
+                        Car(i).AXIS_X = Tag_point_list(j).X
+                        Car(i).AXIS_Y = Tag_point_list(j).Y
+                        Car(i).AXIS_Z = Tag_point_list(j).th
+                    End If
+                Next
+
             Else
-                e.Graphics.FillRectangle(myBrushG, CInt(ChargerClient(i).AXIS_X) - offset_x, CInt(ChargerClient(i).AXIS_Y) - offset_y, CInt(AGVratio * 150), CInt(AGVratio * 150))
+  
+                Dim offsetTh As Integer = 0
+                'ReverseXY 
+                'bit0(§œ¬‡XY)
+                'bit1 §œ¬‡X
+                'bit2 §œ¬‡Y
+                '
+                If (Car(i).ReverseXY = 0) Then
+                    If Car(i).offset_X >= 0 Then
+                        Car(i).AXIS_X = (Car(i).device_status(23) + Car(i).offset_X)
+                    Else
+
+                        Car(i).AXIS_X = -Car(i).offset_X - Car(i).device_status(23)
+
+                    End If
+                    If Car(i).offset_Y >= 0 Then
+
+                        Car(i).AXIS_Y = Car(i).device_status(24) + Car(i).offset_Y
+                    Else
+
+                        Car(i).AXIS_Y = -Car(i).device_status(24) - Car(i).offset_Y
+
+                    End If
+                ElseIf (Car(i).ReverseXY = 2) Then
+                    '•ŒØuπÍº∆¶r
+                    Car(i).AXIS_X = (Car(i).device_status(23) + Car(i).offset_X)
+                    Car(i).AXIS_Y = Car(i).device_status(24) + Car(i).offset_Y
+                ElseIf (Car(i).ReverseXY = 3) Then
+                    '§œ¶VX °AYØuπÍ
+                    If Car(i).offset_X >= 0 Then
+                        Car(i).AXIS_X = (Car(i).device_status(23) + Car(i).offset_X)
+                    Else
+                        Car(i).AXIS_X = -Car(i).offset_X - Car(i).device_status(23)
+                    End If
+                    Car(i).AXIS_Y = Car(i).device_status(24) + Car(i).offset_Y
+                Else
+                    'XY§œ¬‡
+                    If Car(i).offset_X >= 0 Then
+                        Car(i).AXIS_X = (Car(i).device_status(24) + Car(i).offset_X)
+                    Else
+                        Car(i).AXIS_X = -Car(i).device_status(24) - Car(i).offset_X
+                    End If
+                    If Car(i).offset_Y >= 0 Then
+                        Car(i).AXIS_Y = Car(i).device_status(23) + Car(i).offset_Y
+                    Else
+                        Car(i).AXIS_Y = -Car(i).device_status(23) - Car(i).offset_Y
+                    End If
+                    offsetTh = -90
             End If
 
-            g.DrawImage(ChargerImg, CInt(ChargerClient(i).AXIS_X) - offset_x, CInt(ChargerClient(i).AXIS_Y) - offset_y, CInt(AGVratio * 150), CInt(AGVratio * 150))
-        Next
-        'For i As Integer = 0 To shelf_car.Length - 1
+                If Car(i).device_status(25) > 65535 / 2 Then
+                    '  Car(i).AXIS_Z = -1 * (Car(i).device_status(25) - 65535) / 100 + offsetTh
+                Else
+                    'Car(i).AXIS_Z = -1 * Car(i).device_status(25) / 100 + offsetTh
+                End If
+            End If
 
-        '    ' g.DrawImage(img, shelf_car(i).X, shelf_car(i).Y)
-        '    g.FillRectangle(Brushes.LightGreen, shelf_car(i).X - 24, shelf_car(i).Y - 32, 35, 45)
-        'Next
+            Dim agv As Image
+
+            If (Car(i).flag = False Or Car(i).status = -2) Then
+
+                agv = AgvOffline.Clone
+            ElseIf Car(i).status = 3 Then
+                '§‚∞ 
+                agv = AgvManual.Clone
+            ElseIf Car(i).device_status(6) = 0 And (Car(i).status = 2 Or Car(i).status = 0) Then
+                agv = AgvIdle.Clone
+            ElseIf Car(i).status = 5 Or Car(i).get_isbusy > 0 Then
+                agv = Agvaction.Clone
+            ElseIf Car(i).status = 4 Or Car(i).status = 1 Or Car(i).status = 4 Or Car(i).status = 12 Or Car(i).status = 8 Then
+                agv = AgvRun.Clone
+            ElseIf (Car(i).status = -1) Then
+                agv = AgvErr.Clone
+            Else
+                agv = AgvOffline.Clone
+            End If
+            e.Graphics.TranslateTransform(CInt(AGVratio * Car(i).AXIS_X) - offset_x, CInt(AGVratio * Car(i).AXIS_Y) - offset_y)
+            e.Graphics.RotateTransform(-Car(i).AXIS_Z)
+            'agv.Rotatelip(System.Drawing.RotateFlipType.Rotate90FlipNone)
+
+            e.Graphics.DrawImage(agv, CInt(AGVratio * -1 * Car(i).width / 2), CInt(AGVratio * -1 * Car(i).height / 2), CInt(AGVratio * Car(i).width), CInt(AGVratio * Car(i).height))
+
+            e.Graphics.RotateTransform(Car(i).AXIS_Z)
+            If Car(i).get_loading = 3 Or Not Car(i).RollData = "" Then
+                ' g.DrawImage(cst_img, CInt(AGVratio * -1 * Car(i).width / 2), CInt(AGVratio * -1 * Car(i).height / 2))
+                g.DrawImage(cst_img, CInt(AGVratio * -1 * cst_img.Width / 2), CInt(AGVratio * -1 * cst_img.Height))
+            End If
+            If Car(i).Lock_user = "" Then
+                e.Graphics.DrawString(Car(i).device_no.ToString, New Font("Tahoma", CInt(AGVratio * 32)), Brushes.Red, CInt(AGVratio * (-15)), CInt(AGVratio * (-10)))
+            Else
+                e.Graphics.DrawString(Car(i).device_no.ToString + " Lock", New Font("Tahoma", CInt(AGVratio * 32)), Brushes.Red, CInt(AGVratio * (-15)), CInt(AGVratio * (-10)))
+            End If
+
+
+            e.Graphics.TranslateTransform(-CInt(AGVratio * Car(i).AXIS_X) + offset_x, -CInt(AGVratio * Car(i).AXIS_Y) + offset_y)
+
+            Dim X(3) As Integer
+            Dim Y(3) As Integer
+            Dim minX2, maxX2, minY2, maxY2 As Integer
+
+            X(0) = (CInt(AGVratio * Car(i).width) / 2) * Math.Cos(Car(i).AXIS_Z * Math.PI / 180) + (CInt(AGVratio * Car(i).height) / 2) * Math.Sin(Car(i).AXIS_Z * Math.PI / 180) + CInt(AGVratio * Car(i).AXIS_X)
+            Y(0) = -(CInt(AGVratio * Car(i).width) / 2) * Math.Sin(Car(i).AXIS_Z * Math.PI / 180) + (CInt(AGVratio * Car(i).height) / 2) * Math.Cos(Car(i).AXIS_Z * Math.PI / 180) + CInt(AGVratio * Car(i).AXIS_Y)
+            X(1) = (CInt(AGVratio * Car(i).width) / 2) * Math.Cos(Car(i).AXIS_Z * Math.PI / 180) + (-CInt(AGVratio * Car(i).height) / 2) * Math.Sin(Car(i).AXIS_Z * Math.PI / 180) + CInt(AGVratio * Car(i).AXIS_X)
+            Y(1) = -(CInt(AGVratio * Car(i).width) / 2) * Math.Sin(Car(i).AXIS_Z * Math.PI / 180) + (-CInt(AGVratio * Car(i).height) / 2) * Math.Cos(Car(i).AXIS_Z * Math.PI / 180) + CInt(AGVratio * Car(i).AXIS_Y)
+            X(3) = (-CInt(AGVratio * Car(i).width) / 2) * Math.Cos(Car(i).AXIS_Z * Math.PI / 180) + (CInt(AGVratio * Car(i).height) / 2) * Math.Sin(Car(i).AXIS_Z * Math.PI / 180) + CInt(AGVratio * Car(i).AXIS_X)
+            Y(3) = -(-CInt(AGVratio * Car(i).width) / 2) * Math.Sin(Car(i).AXIS_Z * Math.PI / 180) + (CInt(AGVratio * Car(i).height) / 2) * Math.Cos(Car(i).AXIS_Z * Math.PI / 180) + CInt(AGVratio * Car(i).AXIS_Y)
+            X(2) = (-CInt(AGVratio * Car(i).width) / 2) * Math.Cos(Car(i).AXIS_Z * Math.PI / 180) + (-CInt(AGVratio * Car(i).height) / 2) * Math.Sin(Car(i).AXIS_Z * Math.PI / 180) + CInt(AGVratio * Car(i).AXIS_X)
+            Y(2) = -(-CInt(AGVratio * Car(i).width) / 2) * Math.Sin(Car(i).AXIS_Z * Math.PI / 180) + (-CInt(AGVratio * Car(i).height) / 2) * Math.Cos(Car(i).AXIS_Z * Math.PI / 180) + CInt(AGVratio * Car(i).AXIS_Y)
+            Array.Sort(X)
+            Array.Sort(Y)
+            minX2 = X(0)
+            maxX2 = X(3)
+            minY2 = Y(0)
+            maxY2 = Y(3)
+            Dim car_width As Integer = maxX2 - minX2
+            Dim car_height As Integer = maxY2 - minY2
+            rect = New Rectangle(minX2 - offset_x, minY2 - offset_y, car_width, car_height)
+            e.Graphics.DrawRectangle(New Pen(Color.Blue, 1), rect)
+            ' If Car(i).get_c Then
+            '   e.Graphics.DrawArc(New Pen(Color.Blue, 2S), CInt(AGVratio * (Car(i).AXIS_X - Car(i).width / 2)), CInt(AGVratio * (Car(i).AXIS_Y - Car(i).height)) - 5, CInt(AGVratio * Car(i).width), CInt(AGVratio * Car(i).width), 0, -1 * (Car(i).get_SOC / 100 * 360))
+        Next
     End Sub
 
-    
+
 
 
     Private Sub Shelf_Car_Pic0_Paint(ByVal sender As Object, ByVal e As System.Windows.Forms.PaintEventArgs)
@@ -4106,11 +5788,11 @@ Public Class Form1
     End Sub
 
 
- 
 
-   
 
-    Private Sub Car1_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car1.Click
+
+
+    Private Sub Car1_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -4128,7 +5810,7 @@ Public Class Form1
 
 
     Private Sub door_check_timer_Tick(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles door_check_timer.Tick
-       
+
         If Me.door_check.IsBusy = False Then
             door_check.RunWorkerAsync()
         End If
@@ -4190,7 +5872,7 @@ Public Class Form1
                     sqlCommand.CommandText = Query
                     sqlCommand.ExecuteNonQuery()
                 Catch ex As Exception
-                    settext(Query + ":Áï∞Â∏∏")
+                    settext(Query + ":≤ß±`")
                 End Try
                 oConn.Close()
                 Door_List(i).Pre_up_sensor = Door_List(i).up_sensor
@@ -4199,13 +5881,7 @@ Public Class Form1
 
 
     End Sub
-    Dim doorcheck As Integer = 0
     Private Sub door_check_DoWork(ByVal sender As System.Object, ByVal e As System.ComponentModel.DoWorkEventArgs) Handles door_check.DoWork
-        settext("DoorCheck")
-        doorcheck += 1
-        If doorcheck > 100 Then
-            doorcheck = 0
-        End If
         For j As Integer = 0 To Door_List.Length - 1
             'If Door_List(j).flag = True And Door_List(j).Connect_flag = False Then
             '    'door.flag = True
@@ -4215,26 +5891,23 @@ Public Class Form1
             '        settext(Door_List(j).EQ_ID + ":Door Connect NG")
             '    End If
             'End If
-            If doorcheck = 0 Then
-                settext("DoorCheck:" + Door_List(j).EQ_ID)
-            End If
+
 
 
             If Door_List(j).flag = True Then
-                If Door_List(j).retry > 20 Then
-                    settext(Door_List(j).EQ_ID + "ÈáçÊñ∞ÈÄ£Á∑ö")
+                If Door_List(j).retry > 10 Then
+                    settext(Door_List(j).EQ_ID + "≠´∑s≥sΩu")
                     If Door_List(j).connect() = False Then
-                        settext(Door_List(j).EQ_ID + "ÈáçÊñ∞ÈÄ£Á∑öÂ§±Êïó")
+                        settext(Door_List(j).EQ_ID + "≠´∑s≥sΩu•¢±—")
                     End If
                 End If
-
                 ' Door_List(j).Write_DO()
                 Door_List(j).Read_DI()
-                Thread.Sleep(20)
+                Thread.Sleep(100)
                 Door_List(j).Read_DO()
-                Thread.Sleep(20)
+                Thread.Sleep(100)
 
-                For i As Integer = 0 To car_no
+                For i As Integer = 0 To car_no - 1
                     If Car(i).subcmd = "" Then
                         Car(i).subcmd = Car(i).get_tagId().ToString
                     End If
@@ -4244,18 +5917,23 @@ Public Class Form1
                             Door_List(j).DoorUp()
                             settext("DoorUp")
                             Door_List(j).control_flag = i
+
                         ElseIf Door_In_Array(tagid_list, (Door_List(j).tagid).ToString, DoorSetLen, 3) Or Door_In_Array(tagid_list, (Door_List(j).tagid + 10000).ToString, DoorSetLen, 3) Then
-                            'ËªäÂ≠êËµ∞Ë∑ØÈ†êË®à‰∏äÂçáÁöÑ‰ΩçÁΩÆÔºåÈñÄÊåÅÁ∫å‰∏äÂçá
+
+                            '®Æ§l®´∏Ùπw≠p§W§…™∫¶Ï∏m°A™˘´˘ƒÚ§W§…
                             Door_List(j).DoorUp()
                             settext("DoorUp")
+
                             Door_List(j).control_flag = i
-                            'ÈñãÈñÄ‰∏¶ÂèñÂæóÈñÄÁöÑÊéßÂà∂Ê¨ä
+
+
+                            '∂}™˘®√®˙±o™˘™∫±±®Ó≈v
                         Else
                             If Door_List(j).control_flag = i Then
-                                'Â¶ÇÊûúÊéßÂà∂Ê¨äÁöÑËªäÂ≠êÊú™Âú®ÈñÄ‰∏ãÔºåÈóúÈñÄ‰∏¶ÈáãÊîæÊéßÂà∂Ê¨ä
+                                '¶p™G±±®Ó≈v™∫®Æ§l•º¶b™˘§U°A√ˆ™˘®√ƒ¿©Ò±±®Ó≈v
                                 Door_List(j).DoorDown()
                                 If Door_List(j).up_sensor = 0 Then
-                                    'ÈáãÊîæÈñÄÁöÑÊéßÂà∂Ê¨ä
+                                    'ƒ¿©Ò™˘™∫±±®Ó≈v
                                     Door_List(j).release()
                                     'door.control_flag = -1
                                 End If
@@ -4271,29 +5949,29 @@ Public Class Form1
     End Sub
 
 
- 
-
-  
 
 
 
-    
-
-   
 
 
-   
 
 
-  
- 
+
+
+
+
+
+
+
+
+
     Private Sub Label31_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Label31.Click
 
     End Sub
 
- 
 
-    Private Sub Car2_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car2.Click
+
+    Private Sub Car2_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -4306,7 +5984,7 @@ Public Class Form1
 
     End Sub
 
-    Private Sub Car3_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car3.Click
+    Private Sub Car3_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -4318,7 +5996,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car4_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car4.Click
+    Private Sub Car4_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -4331,7 +6009,7 @@ Public Class Form1
 
     End Sub
 
-    Private Sub Car5_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car5.Click
+    Private Sub Car5_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -4344,7 +6022,7 @@ Public Class Form1
 
     End Sub
 
-    Private Sub Car6_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car6.Click
+    Private Sub Car6_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -4356,8 +6034,8 @@ Public Class Form1
         End Try
     End Sub
 
-   
-    Private Sub Car0_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car0.Click
+
+    Private Sub Car0_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -4382,7 +6060,7 @@ Public Class Form1
         Check_SQL_idx = False
 
         For i As Integer = 0 To Me.ListView1.Items.Count - 1
-            'Ê™¢Êü•ÂëΩ‰ª§ÊòØÂê¶Â≠òÂú®
+            '¿À¨d©R•O¨Oß_¶s¶b
             If idx = CInt(Me.ListView1.Items(i).SubItems(0).Text) Then
                 Check_SQL_idx = True
             End If
@@ -4390,7 +6068,7 @@ Public Class Form1
 
     End Function
 
- 
+
 
     Private Sub ToolStripMenuItem3_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles ToolStripMenuItem3.Click
         add_cmd.txtCar.Text = Car(view_car_idx).device_no.ToString
@@ -4400,8 +6078,8 @@ Public Class Form1
         add_cmd.Show()
     End Sub
 
-  
-  
+
+
     Private Sub ContextMenuStrip2_Opening(ByVal sender As System.Object, ByVal e As System.ComponentModel.CancelEventArgs) Handles ContextMenuStrip2.Opening
         Dim CM As ContextMenuStrip = sender
         Dim picbox_no As String = CM.SourceControl.Name.Substring(3)
@@ -4425,56 +6103,56 @@ Public Class Form1
 
     Private Sub Button15_Click_1(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button15.Click
 
-        'Â¶ÇÊûúÊéßÂà∂Ê¨äÁöÑËªäÂ≠êÊú™Âú®ÈñÄ‰∏ãÔºåÈóúÈñÄ‰∏¶ÈáãÊîæÊéßÂà∂Ê¨ä
+        '¶p™G±±®Ó≈v™∫®Æ§l•º¶b™˘§U°A√ˆ™˘®√ƒ¿©Ò±±®Ó≈v
         Door_List(CInt(Door_idx.Text)).DoorDown()
         If Door_List(CInt(Door_idx.Text)).up_point = 0 Then
-            'ÈáãÊîæÈñÄÁöÑÊéßÂà∂Ê¨ä
+            'ƒ¿©Ò™˘™∫±±®Ó≈v
             Door_List(CInt(Door_idx.Text)).release()
             'door.control_flag = -1
         End If
 
     End Sub
 
-   
 
-    Private Sub Button11_Click_1(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button11.Click
-        For i As Integer = 0 To car_no
+
+    Private Sub Button11_Click_1(ByVal sender As System.Object, ByVal e As System.EventArgs)
+        For i As Integer = 0 To car_no - 1
             Car(i).online = True
         Next
         Button7.Text = "ONLINE"
     End Sub
 
     Private Sub Button8_Click_1(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button8.Click
-        For i As Integer = 0 To car_no
+        For i As Integer = 0 To car_no - 1
             Car(i).online = False
         Next
         Button7.Text = "OFFLINE"
     End Sub
     Function Cidx(ByVal device_no As Integer) As Integer
         Cidx = 0
-        For i As Integer = 0 To car_no
+        For i As Integer = 0 To car_no - 1
             If Car(i).device_no = device_no Then
-                cidx = i
+                Cidx = i
             End If
         Next
         Return Cidx
     End Function
 
     Private Sub Button16_Click_1(ByVal sender As System.Object, ByVal e As System.EventArgs)
-      
+
     End Sub
 
-  
 
-   
-    Private Sub Floor_Map_SelectedIndexChanged(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Floor_Map.SelectedIndexChanged
+
+
+    Private Sub Floor_Map_SelectedIndexChanged(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Me.PictureBox1.Invalidate()
     End Sub
 
 
 
-  
-    Private Sub Car7_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car7.Click
+
+    Private Sub Car7_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -4487,7 +6165,7 @@ Public Class Form1
 
     End Sub
 
-    Private Sub Car8_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car8.Click
+    Private Sub Car8_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -4500,7 +6178,7 @@ Public Class Form1
 
     End Sub
 
-    Private Sub Car9_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car9.Click
+    Private Sub Car9_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -4512,7 +6190,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car10_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car10.Click
+    Private Sub Car10_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -4524,7 +6202,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car11_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car11.Click
+    Private Sub Car11_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -4537,10 +6215,10 @@ Public Class Form1
 
     End Sub
 
-  
 
 
-  
+
+
 
     Private Sub LFT_timer_Tick(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles LFT_timer.Tick
         If Me.LFT_bgwork.IsBusy = False Then
@@ -4588,17 +6266,13 @@ Public Class Form1
                     oConn = New MySqlConnection(Mysql_str)
                     oConn.Open()
                     sqlCommand.Connection = oConn
-                    Dim carno As String = "-1"
-                    If LFT_List(i).control_flag > -1 Then
-                        carno = Car(LFT_List(i).control_flag).device_no.ToString
-                    End If
-                    Query = "update lft set Door_Open=" + LFT_List(i).open_sensor.ToString + ",floor_no=" + floor_no.ToString + ",DI='" + LFT_List(i).sFrom_LFT_DI + "',DO='" + LFT_List(i).sFrom_LFT_DO + "',Stepi=" + LFT_List(i).LFT_STEP_I.ToString + ",ControlCar=" + carno + " where EQ_ID='" + LFT_List(i).EQ_ID + "'"
+                    Query = "update lft set Door_Open=" + LFT_List(i).open_sensor.ToString + ",floor_no=" + floor_no.ToString + " where EQ_ID='" + LFT_List(i).EQ_ID + "'"
                     Try
 
                         sqlCommand.CommandText = Query
                         sqlCommand.ExecuteNonQuery()
                     Catch ex As Exception
-                        settext(Query + ":Áï∞Â∏∏")
+                        settext(Query + ":≤ß±`")
                     End Try
                     oConn.Close()
 
@@ -4625,7 +6299,7 @@ Public Class Form1
     Sub writeLFTlog(ByVal str As String)
         Try
             Dim sw As StreamWriter = New StreamWriter(".\log\" + Now().ToString("yyyyMMdd") + "_toLFT.log", True, Encoding.Default)
-            sw.Write(Now.ToString + ":" + str + vbCrLf)
+            sw.Write(Now.ToString("yyyy-MM-dd HH:mm:ss") + ":" + str + vbCrLf)
             sw.Flush()
             sw.Close()
         Catch ex As Exception
@@ -4642,10 +6316,10 @@ Public Class Form1
                 ' LFT_List(j).control_flag = -1
 
 
-                For i As Integer = 0 To car_no
-                    If (select_LFT(LFT_List(j).tagid, Car(i).subcmd) Or select_LFT(LFT_List(j).tagid, Car(i).get_tagId.ToString)) And (LFT_List(j).control_flag = i Or LFT_List(j).control_flag = -1) Then
+                For i As Integer = 0 To car_no - 1
+                    If (select_LFT(LFT_List(j).tagid, Car(i).subcmd) Or select_LFT(LFT_List(j).tagid, Car(i).get_tagId.ToString)) And Car(i).get_auto = 0 And (LFT_List(j).control_flag = i Or LFT_List(j).control_flag = -1) Then
                         'If (select_LFT(LFT_List(j).tagid, Car(i).get_tagId.ToString)) And Car(i).get_auto = 0 Then
-                        'Èªû‰ΩçË¢´È†êÁ¥ÑÂ∞±Êé•ÁÆ°ÈõªÊ¢ØÊéßÂà∂Ê¨äÔºå‰∏¶ÊéßÂà∂ÈõªÊ¢Ø
+                        '¬I¶Ï≥Qπw¨˘¥N±µ∫ﬁπq±Ë±±®Ó≈v°A®√±±®Óπq±Ë
 
                         'select_floor(Car(i).main_subcmd, LFT_List(j).tagid)
 
@@ -4658,13 +6332,7 @@ Public Class Form1
                             LFTDI += LFT_List(j).From_LFT_DI(jj).ToString
                             LFTDO += LFT_List(j).From_LFT_DO(jj).ToString
                         Next
-                        If LFT_List(j).control_flag > -1 Then
-                            writeLFTlog(LFT_List(j).tagid.ToString + ",STEP:" + LFT_List(j).LFT_STEP_I.ToString + ",control_car:" + Car(LFT_List(j).control_flag).device_no.ToString + ",DoWork")
-                        Else
-                            writeLFTlog(LFT_List(j).tagid.ToString + ",STEP:" + LFT_List(j).LFT_STEP_I.ToString + ",control_car:" + LFT_List(j).control_flag.ToString + ",DoWork")
-                        End If
-                        LFT_List(j).sFrom_LFT_DI = LFTDI
-                        LFT_List(j).sFrom_LFT_DO = LFTDO
+                        writeLFTlog(LFT_List(j).tagid.ToString + ",STEP:" + LFT_List(j).LFT_STEP_I.ToString + ",control_flag:" + LFT_List(j).control_flag.ToString + ",DoWork")
                         writeLFTlog(LFTDO)
                         writeLFTlog(LFTDI)
 
@@ -4673,10 +6341,10 @@ Public Class Form1
                         ' settext("LFT:" + Query_Floor(Car(i).from_pos).ToString + "," + Query_Floor(Car(i).To_pos).ToString + "," + Car(i).get_tagId.ToString + vbCrLf + "control_flag:" + i.ToString)
                         settext(debuglog)
                     Else
-                        'ÈáãÊîæÊéßÂà∂Ê¨ä
+                        'ƒ¿©Ò±±®Ó≈v
                         If LFT_List(j).control_flag = i Then
-                            'Â¶ÇÊûúÊéßÂà∂Ê¨äÁöÑËªäÂ≠êÊú™Âú®LFTÈªû‰ΩçÔºåÈáãÊîæÊéßÂà∂Ê¨ä
-                            'ÈáãÊîæÈñÄÁöÑÊéßÂà∂Ê¨ä
+                            '¶p™G±±®Ó≈v™∫®Æ§l•º¶bLFT¬I¶Ï°Aƒ¿©Ò±±®Ó≈v
+                            'ƒ¿©Ò™˘™∫±±®Ó≈v
                             LFT_List(j).release()
 
                         End If
@@ -4731,22 +6399,23 @@ Public Class Form1
         'start_cmd = subcmd.Remove(0, subcmd.IndexOf(tagid + ","))
         ' start_cmd = subcmd.Remove(0, subcmd.IndexOf(lft_tagid + ","))
     End Function
-  
+
 
     Private Sub Button23_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button23.Click
         'LFT_List(0).release()
         'LFT_List(0).write_do()
         LFT_List(CInt(LFT_idx.Text)).LFT_STEP_I = 0
         LFT_List(CInt(LFT_idx.Text)).control_flag = -1
-        LFT_List(CInt(LFT_idx.Text)).release()
 
     End Sub
-    Function Query_Floor(ByVal tagid As Integer) As Integer
+    Function Query_Floor(ByVal tagid As Integer)
         Query_Floor = 0
         tagid = tagid Mod 10000
-        If Tag_point_Dictionary.ContainsKey(tagid) And tagid > 0 Then
-            Return Tag_point_Dictionary(tagid).floor_no
-        End If
+        For i As Integer = 0 To Tag_point_list.Length - 1
+            If tagid = Tag_point_list(i).TagId Then
+                Query_Floor = Tag_point_list(i).floor_no
+            End If
+        Next
     End Function
     Function select_LFT(ByVal LFT_tagid As Integer, ByVal subcmd As String)
         Dim path_list() As String = subcmd.Split(",")
@@ -4756,7 +6425,7 @@ Public Class Form1
             If In_Array(path_list, (LFT_tagid + i).ToString, 3) Then
                 Return True
             End If
-            'ÈÄÜÂú∞Âúñ‰πüÂèØ‰ª•ÊàêÁ´ã
+            '∞f¶aπœ§]•i•H¶®•ﬂ
             If In_Array(path_list, (LFT_tagid + i + 10000).ToString, 3) Then
                 Return True
             End If
@@ -4766,8 +6435,8 @@ Public Class Form1
 
     End Function
 
-   
-   
+
+
     Function Send2AGV(ByVal car_idx As Integer, ByVal cmdtype As Integer)
 
         Dim oConn As MySqlConnection
@@ -4776,6 +6445,7 @@ Public Class Form1
         Dim i As Integer = 0
         Send2AGV = ""
         Dim old_subcmd As String = Car(car_idx).subcmd
+
         If Not Car(car_idx).cmd_idx = -2 And Not Car(car_idx).To_pos = 0 Then
 
             oConn = New MySqlConnection(Mysql_str)
@@ -4788,6 +6458,7 @@ Public Class Form1
                 Dim last_direction As Integer
                 Dim cmd_to_point As Integer = 0
                 cmd_to_point = Car(car_idx).To_pos
+                'Car(car_idx).To_AGV(1) = Car(car_idx).To_pos
                 Car(car_idx).subcmd_req = ""
                 If Car(car_idx).get_pin = 10 And Car(car_idx).get_Shelf_Car_No > 0 And Car(car_idx).cmd_Shelf_Car_No = 0 Then
                     Dim mysql_Object As Object
@@ -4811,183 +6482,365 @@ Public Class Form1
                         settext(Query + ":" + ex.Message)
                     End Try
                 End If
-                'ÈÅ∏ÊìáË∑ØÂæë->Â°û‰ΩèÈÅ∏ÊìáÁ¨¨‰∫åË∑ØÂæë->Â°û‰Ωè->ÈÅ∏ÊìáÈÄÄÈÅøÈªû
-                'ÈÅ∏ÊìáË∑ØÂæë->Â°û‰ΩèÈÅ∏ÊìáÁ¨¨‰∫åË∑ØÂæë->Â°û‰Ωè->ÈÅ∏ÊìáÈÄÄÈÅøÈªû
-
+                'øÔæ‹∏ÙÆ|->∂Î¶ÌøÔæ‹≤ƒ§G∏ÙÆ|->∂Î¶Ì->øÔæ‹∞h¡◊¬I
+                'øÔæ‹∏ÙÆ|->∂Î¶ÌøÔæ‹≤ƒ§G∏ÙÆ|->∂Î¶Ì->øÔæ‹∞h¡◊¬I
 
                 If Car(car_idx).get_pin = 10 And Not Car(car_idx).cmd_Shelf_Car_Type = "" Then
-                    For ii As Integer = 1 To Dijkstra_list.Length - 1
-                        'Âà§Êñ∑ËºâË≤®ÁöÑÁâ©ÂìÅÔºå‰ΩøÁî®Ë©≤Áâ©ÂìÅÁöÑË∑ØÂæë
-                        If Car(car_idx).cmd_Shelf_Car_Type = Dijkstra_list(ii).name Then
-                            If (Car(car_idx).Car_type = "FORK" Or Car(car_idx).Car_type = "LOWCAR") And Car(car_idx).get_loading() = 3 Then
 
-                                Car(car_idx).subcmd = Dijkstra_fn.Dijkstra_fn_ary(Dijkstra_list(ii).ary, Tag_ID_Fork_List, Car(car_idx).get_tagId, cmd_to_point.ToString, Car(car_idx).Block_Point)
-                            ElseIf Car(car_idx).Car_type = "FORK" Or Car(car_idx).Car_type = "LOWCAR" Then
-                                Car(car_idx).subcmd = Dijkstra_fn.Dijkstra_fn_ary(Dijkstra_list(1).ary, Tag_ID_Fork_List, Car(car_idx).get_tagId, cmd_to_point.ToString, Car(car_idx).Block_Point)
+                    For ii As Integer = 1 To Dijkstra_list.Length - 1
+                        'ßP¬_∏¸≥f™∫™´´~°A®œ•Œ∏”™´´~™∫∏ÙÆ|
+                        If Car(car_idx).cmd_Shelf_Car_Type = Dijkstra_list(ii).name Then
+                            If Car(car_idx).Car_type = "FORK" And Car(car_idx).get_loading() = 3 Then
+                                Car(car_idx).subcmd = Dijkstra_fn_ary(Dijkstra_list(ii).ary, Tag_ID_Fork_List, Car(car_idx).get_tagId, cmd_to_point.ToString, Car(car_idx).Block_Point + "," + AllBlockPoint, Car(car_idx).Block_Path)
+                            ElseIf Car(car_idx).Car_type = "FORK" Then
+                                Car(car_idx).subcmd = Dijkstra_fn_ary(Dijkstra_list(1).ary, Tag_ID_Fork_List, Car(car_idx).get_tagId, cmd_to_point.ToString, Car(car_idx).Block_Point + "," + AllBlockPoint, Car(car_idx).Block_Path)
                             Else
-                                Car(car_idx).subcmd = Dijkstra_fn.Dijkstra_fn_ary(Dijkstra_list(ii).ary, Tag_ID_List, Car(car_idx).get_tagId, cmd_to_point.ToString, Car(car_idx).Block_Point)
+                                Car(car_idx).subcmd = Dijkstra_fn_ary(Dijkstra_list(ii).ary, Tag_ID_List, Car(car_idx).get_tagId, cmd_to_point.ToString, Car(car_idx).Block_Point + "," + AllBlockPoint, Car(car_idx).Block_Path)
                             End If
                         End If
                     Next
                 Else
-                    'Á©∫ËªäÁî®ÂéüÂßãË∑ØÂæë
-                    If Car(car_idx).Car_type = "FORK" Or Car(car_idx).Car_type = "LOWCAR" Then
-                        Car(car_idx).subcmd = Dijkstra_fn.Dijkstra_fn_ary(Dijkstra_list(1).ary, Tag_ID_Fork_List, Car(car_idx).get_tagId, cmd_to_point.ToString, Car(car_idx).Block_Point)
+                    '™≈®Æ•Œ≠Ï©l∏ÙÆ|
+                    If Car(car_idx).Car_type = "FORK" Then
+                        Car(car_idx).subcmd = Dijkstra_fn_ary(Dijkstra_list(1).ary, Tag_ID_Fork_List, Car(car_idx).get_tagId, cmd_to_point.ToString, Car(car_idx).Block_Point + "," + AllBlockPoint, Car(car_idx).Block_Path)
                     Else
-                        Car(car_idx).subcmd = Dijkstra_fn.Dijkstra_fn_ary(Dijkstra_list(0).ary, Tag_ID_List, Car(car_idx).get_tagId, cmd_to_point.ToString, Car(car_idx).Block_Point)
+                        Car(car_idx).subcmd = Dijkstra_fn_ary(Dijkstra_list(0).ary, Tag_ID_List, Car(car_idx).get_tagId, cmd_to_point.ToString, Car(car_idx).Block_Point + "," + AllBlockPoint, Car(car_idx).Block_Path)
                     End If
 
                 End If
 
 
                 If Not Car(car_idx).subcmd = "" Or Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString() Then
+                    'Start
+
                     Dim car_subcmd As String = ""
+
                     Car(car_idx).main_subcmd = Car(car_idx).subcmd
                     settext(Car(car_idx).device_no.ToString + ":main_subcmd" + Car(car_idx).main_subcmd, True, Car(car_idx).device_no)
-                    For k As Integer = 0 To car_no
-                        If (Not k = car_idx) Then
-                            If Car(k).subcmd = "" Then
-                                Car(k).subcmd = Car(k).get_tagId
+
+                    'ß÷≥t∞f¶V
+                    Car(car_idx).fast_subcmd = "" 'Dijkstra_fn_ary(Dijkstra_list(2).ary, Tag_ID_List, Car(car_idx).get_tagId, cmd_to_point.ToString, Car(car_idx).Block_Point + "," + AllBlockPoint, Car(car_idx).Block_Path)
+                    '•˝®˙15≠”°AßP¬_¨Oß_≠´≈| ¬¬∏ÙÆ|
+
+                    settext(Car(car_idx).device_no.ToString + ":fast_subcmd= " + Car(car_idx).fast_subcmd, True, Car(car_idx).device_no)
+
+
+                    For ii As Integer = 0 To car_no - 1
+                        'Dim fast_subcmd As String = ""
+                        If (Not ii = car_idx) Then
+                            If Car(ii).subcmd = "" Then
+                                Car(ii).subcmd = Car(ii).get_tagId().ToString
                             End If
-                            If Car(k).subcmd = "" Then
-                                Car(k).subcmd = Car(k).get_tagId().ToString
-                            End If
-                            car_subcmd = Get_group_path(Car(k).subcmd) 'ÂåÖÂê´ÂéüÊú¨ÁöÑsubcmd
-                            Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, car_subcmd)
+                            car_subcmd = Get_group_path(Car(ii).subcmd) '•]ßt≠Ï•ª™∫subcmd
+                            Car(car_idx).fast_subcmd = Check_Path(Car(car_idx).fast_subcmd, Car(ii).subcmd, Car(car_idx).width, Car(car_idx).height, Tag_point_list, Car(ii).AXIS_X, Car(ii).AXIS_Y, Car(ii).AXIS_Z)
+                            Car(car_idx).fast_subcmd = Check_Path_group(Car(car_idx).fast_subcmd, car_subcmd)
+                            settext(Car(ii).device_no.ToString + ":ßPfastcmd=" + Car(car_idx).fast_subcmd, True, Car(car_idx).device_no)
                         End If
-                        If Car(car_idx).subcmd = "" Or Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString Then 'Âà§Êñ∑Ë¢´kÊà™Êñ∑‰∫Ü
-                            Dim temp As String = Cut_before_Path(Car(k).main_subcmd, Car(k).get_tagId.ToString)
-                            settext(Car(car_idx).device_no.ToString + ":main_cmd=" + Car(car_idx).main_subcmd, True, Car(car_idx).device_no)
-                            settext(Car(car_idx).device_no.ToString + ":ÁõÆÁöÑÂú∞Ë¢´" + Car(k).device_no.ToString + "Êìã‰Ωè:" + Car(k).subcmd + "(" + Car(k).get_tagId.ToString + ")grouppath=" + car_subcmd, True, Car(car_idx).device_no)
-                            Car(car_idx).subcmd_req = Car(k).device_no.ToString
-                            If Car(k).subcmd = "" Or Car(k).subcmd = Car(k).get_tagId.ToString Or (In_Subcmd(temp, Car(car_idx).get_tagId().ToString) And Car(k).status = 4) Then 'kËªä‰πüÊ≤íÊúâÂãï‰Ωú Ë¶ÅÊéíÈô§ ÈõªÊ¢ØËàáÊªëÂçáÈñÄ ‰∏çÁÑ∂Á≠âÂæÖÊªëÂçáÈñÄÁöÑÊôÇÂÄôÊúÉ‰∫ÇË∑ë
-                                'Âà§Êñ∑ÁÇ∫Â∞çÂ≥ôÊàñÊòØÂâçÊñπËªäËºõÁÑ°Ê≥ïÈÄöË°å
+                    Next
+
+                    Car(car_idx).fast_subcmd = short_path(Car(car_idx).main_subcmd, Car(car_idx).fast_subcmd, Car(car_idx).MaxPath + 3)
+                    If Not Car(car_idx).fast_subcmd = "" Then
+                        Car(car_idx).subcmd = Car(car_idx).fast_subcmd               
+                    End If
+                'ßP¬_±¯•Û´·¥N §ß¥N®œ•Œ≥Ãµu∏ÙÆ|
+
+                For k As Integer = 0 To car_no - 1
+                    Dim pre_subcmd As String = Car(car_idx).subcmd
+                    If Not k = car_idx And Car(k).device_no > 0 Then
+                        If Car(k).subcmd = "" Then
+                            Car(k).subcmd = Car(k).get_tagId.ToString
+                        End If
+                        car_subcmd = Get_group_path(Car(k).subcmd) '•]ßt≠Ï•ª™∫subcmd
+                            settext(Car(car_idx).device_no.ToString + ":check_path" + Car(car_idx).subcmd + "X" + Car(k).device_no.ToString + ":" + car_subcmd)
+                        Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, Car(k).subcmd, Car(car_idx).width, Car(car_idx).height, Tag_point_list, Car(k).AXIS_X, Car(k).AXIS_Y, Car(k).AXIS_Z) ' ®œ•Œ®Æ§l≠±øn®”∫I¬_
+
+                        '®œ•ŒGroup®”∫I¬_
+                        settext(Car(car_idx).device_no.ToString + ":" + Car(car_idx).subcmd)
+                        Car(car_idx).subcmd = Check_Path_group(Car(car_idx).subcmd, car_subcmd)
+                    End If
+                    Dim ans As Integer
+                    ' ans = Send_CMD(Car(k).device_no, 0, 240)
+                    Dim cmd_cnt As Integer = 0
+
+                    'πw•˝ª∞®Æ
+                    Dim cmdlen As Integer = Car(car_idx).subcmd.Split(",").Length
+                    If Not pre_subcmd = Car(car_idx).subcmd And Car(k).cmd_idx = -2 And Car(k).Lock_user = "" And cmdlen < 20 Then
+                        For iii As Integer = 0 To ListView1.Items.Count - 1
+                            If CInt(ListView1.Items(iii).SubItems(1).Text) = Car(k).device_no Then
+                                cmd_cnt += 1
+                            End If
+                        Next
+                        If Car(k).wait_point > 0 And (Car(k).get_status = 0 Or Car(k).get_status = 2) And Car(k).get_auto = 0 And cmd_cnt = 0 And DateDiff(DateInterval.Second, CDate(Car(k).Pre_TagID_time), CDate(Now())) > 6 Then
+
+                            Dim to_point As String = Car(k).wait_point.ToString
+                                settext(Car(car_idx).device_no.ToString + "¥£¶≠ª∞®Æpre_subcmd" + pre_subcmd + ";" + "subcmd" + Car(car_idx).subcmd + ";", True, Car(car_idx).device_no)
+                            If Car(k).get_tagId < 1999 Then
+                                to_point = "2008,2030,2036,2056"
+
+                            ElseIf Car(k).get_tagId >= 2000 And Car(k).get_tagId < 2999 Then
+                                to_point = "1003,1013,1016,1022"
+                            ElseIf Car(k).get_tagId >= 3000 And Car(k).get_tagId < 3999 Then
+                                If Car(k).device_no > 2 Then
+                                    to_point = "4019,2036,2056"
+                                Else
+                                    to_point = "4019,4031"
+                                End If
+
+
+                            ElseIf Car(k).get_tagId >= 4000 And Car(k).get_tagId < 4999 Then
+                                If Car(k).device_no > 2 Then
+                                    to_point = "1003,1013,1016,1022,2036,2056"
+                                Else
+                                    to_point = "3026"
+                                End If
+                            Else
+                                to_point = "2008,2023,2036,2043,2055"
+                                to_point += ",1008,1013,1018,1022,1032"
+                                to_point += ",4016,4019,4028"
+                                to_point += ",3011,3014,3025"
+                            End If
+                                Dim temp_point As String = ""
+                                If Car(k).device_no > 3 Then
+                                    Query = "SELECT  group_concat(Tag_ID) "
+                                    Query += " from (SELECT A.Tag_ID,( A.X - B.X ) * ( A.X - B.X ) + ( A.Y - B.Y ) * ( A.Y - B.Y ) AS dist "
+                                    Query += " FROM `point` A , `point` B  where (A.Tag_ID in (" + to_point + ") or A.Retreat_Flag=1 ) and not A.Tag_ID  =4028 and B.Tag_ID=" + Car(car_idx).get_tagId.ToString
+                                    Query += "  and A.floor_no=B.floor_no and not A.`Tag_ID` in (select CmdTo FROM `agv_cmd_list` )  and not A.`Tag_ID`  in (select Position FROM `agv_list` )"
+
+                                    Query += " order by dist ASC limit 0,10 ) C"
+                                    sqlCommand.CommandText = Query
+                                Else
+                                    Query = "SELECT  group_concat(Tag_ID) "
+                                    Query += " from (SELECT A.Tag_ID,( A.X - B.X ) * ( A.X - B.X ) + ( A.Y - B.Y ) * ( A.Y - B.Y ) AS dist "
+                                    Query += " FROM `point` A , `point` B  where (A.Tag_ID in (" + to_point + ") or A.Retreat_Flag=1 ) and B.Tag_ID=" + Car(car_idx).get_tagId.ToString
+                                    Query += "  and A.floor_no=B.floor_no and not A.`Tag_ID` in (select CmdTo FROM `agv_cmd_list` )  and not A.`Tag_ID`  in (select Position FROM `agv_list` )"
+
+                                    Query += " order by dist ASC limit 0,10 ) C"
+                                    sqlCommand.CommandText = Query
+                                End If
+
+                            to_point = sqlCommand.ExecuteScalar.ToString
+
+                                Dim cmd As String = Dijkstra_fn_ary(Dijkstra_list(0).ary, Tag_ID_List, Car(k).get_tagId(), to_point, AllBlockPoint + "," + Car(k).Block_Point + "," + Car(car_idx).subcmd.ToString, Car(k).Block_Path)
+                                Application.DoEvents()
+                            Dim cmd_list() As String = cmd.Split(",")
+                            If cmd_list.Length > 14 Then
+                                to_point = CInt(cmd_list(13))
+                            Else
+                                to_point = cmd_list(cmd_list.Length - 1)
+                            End If
+                            If Not to_point = "" Then
+                                ans = Send_CMD(Car(k).device_no, 1, to_point, "Retreat" + Car(car_idx).device_no.ToString + Car(k).device_no.ToString)
+                                cmd_cnt += 1
+                                settext(Car(car_idx).device_no.ToString + "ª∞®Æ->" + to_point, True, Car(car_idx).device_no)
+                            End If
+
+                        End If
+                    End If
+                    '----------------------------------------------
+
+                    If Car(car_idx).subcmd = "" Or Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString Then 'ßP¬_≥Qk∫I¬_§F
+                        Dim temp As String = Cut_before_Path(Car(k).main_subcmd, Car(k).get_tagId.ToString)
+                            'settext(Car(car_idx).device_no.ToString + ":main_cmd=" + Car(car_idx).main_subcmd, True, Car(car_idx).device_no)
+                        settext(Car(car_idx).device_no.ToString + ":•ÿ™∫¶a≥Q" + Car(k).device_no.ToString + "æ◊¶Ì:" + Car(k).subcmd + "(" + Car(k).get_tagId.ToString + ")grouppath=" + car_subcmd, True, Car(car_idx).device_no)
+                        settext(Car(car_idx).subcmd + "," + Car(k).subcmd + "," + Car(car_idx).width.ToString + "," + Car(car_idx).height.ToString + "," + Car(k).AXIS_X.ToString + "," + Car(k).AXIS_Y.ToString + "," + Car(k).AXIS_Z.ToString)
+                        settext(Car(car_idx).device_no.ToString + " Group:" + Car(car_idx).subcmd + " car_subcmd:" + car_subcmd)
+                        Car(car_idx).subcmd_req = Car(k).device_no.ToString
+                            If Car(k).subcmd = "" Or Car(k).subcmd = Car(k).get_tagId.ToString Or (In_Subcmd(temp, Car(car_idx).get_tagId().ToString) And Car(k).status = 4) Then 'k®Æ§]®S¶≥∞ ß@ ≠n±∆∞£ ©Œ¨O´e®Æ®˙©Òπq±ËªP∑∆§…™˘ §£µMµ•´›∑∆§…™˘™∫Æ…≠‘∑|∂√∂]
+                                'ßP¬_¨∞πÔ´œ©Œ¨O´e§Ë®ÆΩ¯µL™k≥q¶Ê
                                 Dim LftFlag As Boolean = CheckCarInLft(Car(k).get_tagId(), Car(k).main_subcmd)
                                 Dim DoorFlag As Boolean = CheckCarInDoor(Car(k).get_tagId())
                                 If In_Subcmd(temp, Car(car_idx).get_tagId().ToString) Then
-                                    settext(Car(car_idx).device_no.ToString + "(" + Car(car_idx).get_tagId().ToString + "):" + "kËªä:" + Car(k).main_subcmd + " autotemp:" + temp)
+                                    settext(Car(car_idx).device_no.ToString + "(" + Car(car_idx).get_tagId().ToString + "):" + "k®Æ:" + Car(k).main_subcmd + " autotemp:" + temp)
                                 End If
+                                settext("k®Æ:" + Car(k).get_info)
 
-                                settext(Car(car_idx).device_no.ToString + ":" + "Âà§Êñ∑ÂâçËªäÁÑ°Âãï‰Ωú", True, Car(car_idx).device_no)
-                                If Car(k).cmd_sql_idx = 0 Then
-                                    Dim ans As Integer
-                                    ' ans = Send_CMD(Car(k).device_no, 0, 240)
-                                    If Car(k).wait_point > 0 Then
-                                        If Car(car_idx).Car_type = "LFT" Then
-                                            ans = Send_CMD(Car(k).device_no, 0, Car(k).wait_point, "30")
-                                        Else
-                                            ans = Send_CMD(Car(k).device_no, 1, Car(k).wait_point)
-                                        End If
-
-                                    End If
+                                settext(Car(car_idx).device_no.ToString + ":" + "ßP¬_´e®ÆµL∞ ß@", True, Car(car_idx).device_no)
+                                If Car(k).get_action > 0 And Car(k).get_auto = 0 And Car(k).get_Err = 0 Then
+                                    settext(Car(car_idx).device_no.ToString + ":" + "´e®Æ¶b®˙©Ò", True, Car(car_idx).device_no)
+                                ElseIf Car(k).get_tagId = Car(k).Cmd_From And Car(k).Pre_TagID_time > Now.AddSeconds(-90) And Car(k).cmd_idx > -2 Then
+                                    settext(Car(car_idx).device_no.ToString + ":" + "´e®Æ®Ï®”∑Ω∫›90¨Ì§∫" + Car(k).Pre_TagID_time.ToString, True, Car(car_idx).device_no)
+                                ElseIf Car(k).get_tagId = Car(k).Cmd_To And Car(k).Pre_TagID_time > Now.AddSeconds(-90) And Car(k).cmd_idx > -2 Then
+                                    settext(Car(car_idx).device_no.ToString + ":" + "´e®Æ®Ï•ÿ™∫∫›90¨Ì§∫" + Car(k).Pre_TagID_time.ToString, True, Car(car_idx).device_no)
                                 ElseIf LftFlag Then
-                                    settext(Car(car_idx).device_no.ToString + ":" + "ÂâçËªäÂú®ÈõªÊ¢ØÁ®ãÂ∫è", True, Car(car_idx).device_no)
-                                    '‰πñ‰πñÂÅúÂ•ΩÊ≠•Ë¶ÅÂãï
+                                    settext(Car(car_idx).device_no.ToString + ":" + "´e®Æ¶bπq±Ëµ{ß«", True, Car(car_idx).device_no)
+                                    '®ƒ®ƒ∞±¶n®B≠n∞ 
                                 ElseIf DoorFlag Then
-                                    settext(Car(car_idx).device_no.ToString + ":" + "ÂâçËªäÂú®ÈñãÈñÄÁ®ãÂ∫è", True, Car(car_idx).device_no)
-                                    '‰πñ‰πñÂÅúÂ•ΩÊ≠•Ë¶ÅÂãï
+                                    settext(Car(car_idx).device_no.ToString + ":" + "´e®Æ¶b∂}™˘µ{ß«", True, Car(car_idx).device_no)
+                                    '®ƒ®ƒ∞±¶n®B≠n∞ 
+                                    'ElseIf DoorFlag Then
+                                    'ßP¬_´e®Æ¨O©R•O≠Ëµ≤ßÙ°A∑«≥∆§U§@πD
                                 Else
-
-                                    If Car(car_idx).Car_type = "FORK" Or Car(car_idx).Car_type = "LOWCAR" Then ' FORK ‰∏çËÉΩÈÄÄÈÅø
-
-                                        Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString  ' Dijkstra_fn_ary(Dijkstra_list(1).ary, Tag_ID_Fork_List, Car(car_idx).get_tagId, cmd_to_point, Car(k).get_tagId.ToString + "," + Car(car_idx).Block_Point)
-                                        settext(Car(car_idx).device_no.ToString + ":" + "‰∏çËÉΩÈÅ∏Á¨¨‰∫åÊ¢ù", True, Car(car_idx).device_no)
-                                    ElseIf Car(car_idx).get_pin = 10 And Not Car(car_idx).cmd_Shelf_Car_Type = "" Then
-                                        For ii As Integer = 1 To Dijkstra_list.Length - 1
-                                            If Car(car_idx).cmd_Shelf_Car_Type = Dijkstra_list(ii).name And Car(car_idx).get_pin = 10 Then
-                                                Car(car_idx).subcmd = Dijkstra_fn.Dijkstra_fn_ary(Dijkstra_list(ii).ary, Tag_ID_List, Car(car_idx).get_tagId, cmd_to_point, (Car(k).get_tagId Mod 10000).ToString + "," + Car(car_idx).Block_Point)
+                                    settext(Car(car_idx).device_no.ToString + ":" + "∂i¶Ê∞h¡◊", True, Car(car_idx).device_no)
+                                    If Car(k).cmd_sql_idx = 0 And Car(k).flag = True And (Car(k).status = 0 Or Car(k).status = 2) And Car(k).Lock_user = "" Then
+                                        For iii As Integer = 0 To ListView1.Items.Count - 1
+                                            If CInt(ListView1.Items(iii).SubItems(1).Text) = Car(k).device_no Then
+                                                cmd_cnt += 1
                                             End If
                                         Next
-                                    Else
-                                        Car(car_idx).subcmd = Dijkstra_fn.Dijkstra_fn_ary(Dijkstra_list(0).ary, Tag_ID_List, Car(car_idx).get_tagId, cmd_to_point, (Car(k).get_tagId Mod 10000).ToString + "," + Car(car_idx).Block_Point)
-                                    End If
+                                        '´e®ÆµL©R•O°A∞e•X∑s™∫©R•O
+                                        If Car(k).wait_point > 0 And (Car(k).get_status = 0 Or Car(k).get_status = 2) And Car(k).get_auto = 0 And cmd_cnt = 0 Then
+                                            Dim to_point As String = Car(k).wait_point.ToString
+                                            If Car(k).wait_point = Car(k).get_tagId Then
+                                                '¶p™G§w∏g®ÏπF
+                                                Dim temp_point As String = ""
+                                                Query = "SELECT  group_concat(Tag_ID) "
+                                                Query += " from (SELECT A.Tag_ID,( A.X - B.X ) * ( A.X - B.X ) + ( A.Y - B.Y ) * ( A.Y - B.Y ) AS dist "
+                                                Query += " FROM `point` A , `point` B  where A.Retreat_Flag=1 and B.Tag_ID=" + Car(car_idx).get_tagId.ToString
+                                                Query += "  and A.floor_no=B.floor_no and not A.`Tag_ID` in (select CmdTo FROM `agv_cmd_list` )  and not A.`Tag_ID`  in (select Position FROM `agv_list` )"
+                                                Query += " order by dist ASC limit 0,10 ) C"
+                                                sqlCommand.CommandText = Query
+                                                to_point = sqlCommand.ExecuteScalar.ToString
 
-
-                                    settext(Car(car_idx).device_no.ToString + ":" + "ÈÅ∏ÊìáÁ¨¨‰∫åË∑ØÂæë" + Car(car_idx).subcmd, True, Car(car_idx).device_no)
-                                    If Not Car(car_idx).subcmd = "" Then
-                                        Car(car_idx).sflag = 1
-                                    End If
-
-                                    'Ê≤íÊúâÁ¨¨‰∫åÊ¢ùË∑ØÂæëÔºåÈÄÄÂà∞ÈÄÄÈÅøÈªû
-                                    For ii As Integer = 0 To car_no
-                                        If (Not ii = car_idx) Then
-                                            If Car(ii).subcmd = "" Then
-                                                Car(ii).subcmd = Car(ii).get_tagId().ToString
                                             End If
-                                            car_subcmd = Get_group_path(Car(ii).subcmd) 'ÂåÖÂê´ÂéüÊú¨ÁöÑsubcmd
-                                            Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, car_subcmd)
-                                        End If
-                                    Next
-                                    If Car(car_idx).subcmd = "" Or Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString Then
+                                            Dim cmd As String = Dijkstra_fn_ary(Dijkstra_list(0).ary, Tag_ID_List, Car(k).get_tagId(), to_point, AllBlockPoint + "," + Car(k).Block_Point, Car(k).Block_Path)
+                                            Dim cmd_list() As String = cmd.Split(",")
 
-                                        Dim temp_point As String = ""
-                                        Query = "SELECT  group_concat(Tag_ID) "
-                                        Query += " from (SELECT A.Tag_ID,( A.X - B.X ) * ( A.X - B.X ) + ( A.Y - B.Y ) * ( A.Y - B.Y ) AS dist "
-                                        Query += " FROM `point` A , `point` B  where A.Retreat_Flag=1 and B.Tag_ID=" + Car(car_idx).get_tagId.ToString
-                                        Query += "  and A.floor_no=B.floor_no and not A.`Tag_ID` in (select CmdTo FROM `agv_cmd_list` )  and not A.`Tag_ID`  in (select Position FROM `agv_list` )"
-                                        Query += " order by dist ASC limit 0,10 ) C"
-                                        sqlCommand.CommandText = Query
-                                        temp_point = sqlCommand.ExecuteScalar.ToString
-                                        car_subcmd = Get_group_path(Car(k).subcmd) 'ÂåÖÂê´ÂéüÊú¨ÁöÑsubcmd
-                                        If Car(car_idx).Car_type = "FORK" Or Car(car_idx).Car_type = "LOWCAR" Then
+                                            If cmd_list.Length > 11 Then
+                                                to_point = CInt(cmd_list(10))
+
+                                            Else
+                                                to_point = cmd_list(cmd_list.Length - 1)
+
+                                            End If
+                                            If Not to_point = "" Then
+                                                cmd_cnt += 1
+                                                ans = Send_CMD(Car(k).device_no, 1, to_point, "Retreat2")
+                                            End If
+
+                                        End If
+
+                                    Else
+                                        Dim Car_main As String = ""
+
+                                        If Car(car_idx).main_subcmd.Split(",").Length > 1 Then
+                                            Car_main = Car(car_idx).main_subcmd.Split(",")(1)
+                                        End If
+
+                                        If Car(car_idx).Car_type = "FORK" Then ' FORK §£Ø‡∞h¡◊
 
                                             Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString  ' Dijkstra_fn_ary(Dijkstra_list(1).ary, Tag_ID_Fork_List, Car(car_idx).get_tagId, cmd_to_point, Car(k).get_tagId.ToString + "," + Car(car_idx).Block_Point)
-                                            settext(Car(car_idx).device_no.ToString + ":" + "‰∏çËÉΩÈÅ∏ÈÄÄÈÅø", True, Car(car_idx).device_no)
-                                            ' Car(car_idx).subcmd = Dijkstra_fn_ary(Dijkstra_list(1).ary, Tag_ID_Fork_List, Car(car_idx).get_tagId, temp_point, Car(k).get_tagId.ToString + "," + Car(car_idx).Block_Point.ToString)
+                                            settext(Car(car_idx).device_no.ToString + ":" + "§£Ø‡øÔ≤ƒ§G±¯", True, Car(car_idx).device_no)
                                         ElseIf Car(car_idx).get_pin = 10 And Not Car(car_idx).cmd_Shelf_Car_Type = "" Then
                                             For ii As Integer = 1 To Dijkstra_list.Length - 1
                                                 If Car(car_idx).cmd_Shelf_Car_Type = Dijkstra_list(ii).name And Car(car_idx).get_pin = 10 Then
-                                                    Car(car_idx).subcmd = Dijkstra_fn.Dijkstra_fn_ary(Dijkstra_list(ii).ary, Tag_ID_List, Car(car_idx).get_tagId, temp_point, (Car(k).get_tagId Mod 10000).ToString + "," + car_subcmd + "," + Car(car_idx).Block_Point.ToString)
+                                                    Car(car_idx).subcmd = Dijkstra_fn_ary(Dijkstra_list(ii).ary, Tag_ID_List, Car(car_idx).get_tagId, cmd_to_point, Car_main + "," + (Car(k).get_tagId Mod 10000).ToString + "," + Car(car_idx).Block_Point + "," + AllBlockPoint, Car(car_idx).Block_Path)
                                                 End If
                                             Next
                                         Else
-                                            Car(car_idx).subcmd = Dijkstra_fn.Dijkstra_fn_ary(Dijkstra_list(0).ary, Tag_ID_List, Car(car_idx).get_tagId, temp_point, (Car(k).get_tagId Mod 10000).ToString + "," + car_subcmd + "," + Car(car_idx).Block_Point.ToString)
+                                            Dim cark As String = GetCarPoint(Car(k).get_tagId, Car(k).AXIS_Z, Car(k).width * 2, Car(k).height)
+                                            'Car(car_idx).subcmd = Dijkstra_fn_ary(Dijkstra_list(0).ary, Tag_ID_List, Car(car_idx).get_tagId, cmd_to_point, Car_main + "," + (Car(k).get_tagId Mod 10000).ToString + "," + Car(car_idx).Block_Point + "," + AllBlockPoint, Car(car_idx).Block_Path)
+                                            Car(car_idx).subcmd = Dijkstra_fn_ary(Dijkstra_list(2).ary, Tag_ID_List, Car(car_idx).get_tagId, cmd_to_point, Car_main + "," + cark + "," + Car(car_idx).Block_Point + "," + AllBlockPoint, Car(car_idx).Block_Path)
                                         End If
 
-                                        settext(Car(car_idx).device_no.ToString + ":" + "ÂõûÂà∞ÈÄÄÈÅøÈªû" + Car(car_idx).subcmd, True, Car(car_idx).device_no)
-                                        Car(car_idx).sflag = 1
+
+                                        settext(Car(car_idx).device_no.ToString + ":" + "øÔæ‹≤ƒ§G∏ÙÆ|:" + Car(car_idx).subcmd, True, Car(car_idx).device_no)
+
+                                        If Not Car(car_idx).subcmd = "" Then
+                                            Car(car_idx).sflag = 1
+                                        End If
+
+
+                                        For ii As Integer = 0 To car_no - 1
+                                            If (Not ii = car_idx) Then
+                                                If Car(ii).subcmd = "" Then
+                                                    Car(ii).subcmd = Car(ii).get_tagId().ToString
+                                                End If
+                                                car_subcmd = Get_group_path(Car(ii).subcmd) '•]ßt≠Ï•ª™∫subcmd
+                                                Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, Car(ii).subcmd, Car(car_idx).width, Car(car_idx).height, Tag_point_list, Car(ii).AXIS_X, Car(ii).AXIS_Y, Car(ii).AXIS_Z)
+                                                Car(car_idx).subcmd = Check_Path_group(Car(car_idx).subcmd, car_subcmd)
+                                            End If
+                                        Next
+                                        If Car(car_idx).subcmd.Split(",").Length < 6 And Not Car(car_idx).subcmd = "" Then
+                                            settext(Car(car_idx).device_no.ToString + ":" + "≤ƒ§G∏ÙÆ|§”µu" + Car(car_idx).subcmd, True, Car(car_idx).device_no)
+                                            Car(car_idx).subcmd = ""
+                                        End If
+                                        If Car(car_idx).subcmd = "" Or Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString Then
+                                            '®S¶≥≤ƒ§G±¯∏ÙÆ|°A∞h®Ï∞h¡◊¬I
+                                            Dim temp_point As String = ""
+                                            Query = "SELECT  group_concat(Tag_ID) "
+                                            Query += " from (SELECT A.Tag_ID,( A.X - B.X ) * ( A.X - B.X ) + ( A.Y - B.Y ) * ( A.Y - B.Y ) AS dist "
+                                            Query += " FROM `point` A , `point` B  where A.Retreat_Flag=1 and B.Tag_ID=" + Car(car_idx).get_tagId.ToString
+                                            Query += "  and A.floor_no=B.floor_no "
+                                            Query += "  and not A.Tag_ID = " + Car(car_idx).get_tagId.ToString
+                                            Query += " order by dist ASC limit 0,10 ) C"
+                                            sqlCommand.CommandText = Query
+                                            temp_point = sqlCommand.ExecuteScalar.ToString
+                                            car_subcmd = Get_group_path(Car(k).subcmd) '•]ßt≠Ï•ª™∫subcmd
+                                            If Car(car_idx).Car_type = "FORK" Then
+
+                                                Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString  ' Dijkstra_fn_ary(Dijkstra_list(1).ary, Tag_ID_Fork_List, Car(car_idx).get_tagId, cmd_to_point, Car(k).get_tagId.ToString + "," + Car(car_idx).Block_Point)
+                                                settext(Car(car_idx).device_no.ToString + ":" + "§£Ø‡øÔ∞h¡◊", True, Car(car_idx).device_no)
+                                                ' Car(car_idx).subcmd = Dijkstra_fn_ary(Dijkstra_list(1).ary, Tag_ID_Fork_List, Car(car_idx).get_tagId, temp_point, Car(k).get_tagId.ToString + "," + Car(car_idx).Block_Point.ToString)
+                                            ElseIf Car(car_idx).get_pin = 10 And Not Car(car_idx).cmd_Shelf_Car_Type = "" Then
+                                                For ii As Integer = 1 To Dijkstra_list.Length - 1
+                                                    If Car(car_idx).cmd_Shelf_Car_Type = Dijkstra_list(ii).name And Car(car_idx).get_pin = 10 Then
+                                                        Car(car_idx).subcmd = Dijkstra_fn_ary(Dijkstra_list(ii).ary, Tag_ID_List, Car(car_idx).get_tagId, temp_point, Car_main + "," + (Car(k).get_tagId Mod 10000).ToString + "," + car_subcmd + "," + Car(car_idx).Block_Point.ToString + "," + AllBlockPoint, Car(car_idx).Block_Path)
+                                                    End If
+                                                Next
+                                            Else
+                                                Car(car_idx).subcmd = Dijkstra_fn_ary(Dijkstra_list(0).ary, Tag_ID_List, Car(car_idx).get_tagId, temp_point, Car_main + "," + (Car(k).get_tagId Mod 10000).ToString + "," + car_subcmd + "," + Car(car_idx).Block_Point.ToString + "," + AllBlockPoint, Car(car_idx).Block_Path)
+                                            End If
+
+                                            settext(Car(car_idx).device_no.ToString + ":" + "¶^®Ï∞h¡◊¬I" + Car(car_idx).subcmd, True, Car(car_idx).device_no)
+                                            Car(car_idx).sflag = 1
+                                        End If
                                     End If
+
+
                                 End If
                             Else
-                                'kËªäÈÇÑÊúâÂëΩ‰ª§ ÈÇ£Â∞±ÂÖàÁ≠âÂæÖ  ÁõÆÂâçÈÇÑÊ≤íÊúâË¶èÂäÉÂÖ∂‰ªñÂ∑•‰Ωú
-                                'È†êË®àÂèØ‰ª•ÊèêÊó©ÈÄÄÈÅø
+                                'k®Æ¡Ÿ¶≥©R•O ®∫¥N•˝µ•´›  •ÿ´e¡Ÿ®S¶≥≥Wπ∫®‰•L§uß@
+                                'πw≠p•i•H¥£¶≠∞h¡◊
                                 If In_Subcmd(Car(k).main_subcmd, Car(car_idx).get_tagId().ToString) Then
-                                    'È†êË®àÂèØ‰ª•ÊèêÊó©ÈÄÄÈÅø kËªäÁöÑmain_subcmd ÊúâÂåÖÂê´ÁèæÂú®ÁöÑËªä
-                                    settext(Car(k).device_no.ToString + ":ÂèØ‰ª•ÊèêÊó©ÈÄÄÈÅø" + Car(k).subcmd, True, Car(car_idx).device_no)
+                                    'πw≠p•i•H¥£¶≠∞h¡◊ k®Æ™∫main_subcmd ¶≥•]ßt≤{¶b™∫®Æ
+                                    settext(Car(k).device_no.ToString + ":•i•H¥£¶≠∞h¡◊" + Car(k).subcmd, True, Car(car_idx).device_no)
                                 End If
-
-
-                                'settext(Car(car_idx).device_no.ToString + ":" + Car(car_idx).main_subcmd, True, Car(car_idx).device_no)
 
 
                             End If
-                            Car(car_idx).main_subcmd = Car(car_idx).subcmd
-                            'ÈáçÊñ∞ÈÅéÊøæÂÖ∂‰ªñËªäÂ≠êÁöÑË∑ØÂæë
-                            For ii As Integer = 0 To car_no
-                                If (Not ii = car_idx) Then
-                                    If Car(ii).subcmd = "" Then
-                                        Car(ii).subcmd = Car(ii).get_tagId().ToString
-                                    End If
-                                    car_subcmd = Get_group_path(Car(ii).subcmd) 'ÂåÖÂê´ÂéüÊú¨ÁöÑsubcmd
-                                    Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, car_subcmd)
+                        Car(car_idx).main_subcmd = Car(car_idx).subcmd
+                        '≠´∑sπL¬o®‰•L®Æ§l™∫∏ÙÆ|
+                        For ii As Integer = 0 To car_no - 1
+                            If (Not ii = car_idx) Then
+                                If Car(ii).subcmd = "" Then
+                                    Car(ii).subcmd = Car(ii).get_tagId().ToString
                                 End If
-                            Next
+                                car_subcmd = Get_group_path(Car(ii).subcmd) '•]ßt≠Ï•ª™∫subcmd
+                                Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, Car(ii).subcmd, Car(car_idx).width, Car(car_idx).height, Tag_point_list, Car(ii).AXIS_X, Car(ii).AXIS_Y, Car(ii).AXIS_Z)
+                                Car(car_idx).subcmd = Check_Path_group(Car(car_idx).subcmd, car_subcmd)
+                            End If
+                        Next
 
-                            Exit For
-                        End If
-
-                    Next
-                    If (Car(car_idx).subcmd = "" Or Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString) Then
-                        settext(Car(car_idx).device_no.ToString + ":ÁÑ°Ë∑ØÂæë:ÂÖ∂‰ªñËªäÂ≠ê", True, Car(car_idx).device_no)
-                        Car(car_idx).subcmd_req += "ËªäÊìã‰Ωè"
+                        Exit For
                     End If
 
-                Else
+                Next
+                If (Car(car_idx).subcmd = "" Or Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString) Then
+                    settext(Car(car_idx).device_no.ToString + ":µL∏ÙÆ|:®‰•L®Æ§l", True, Car(car_idx).device_no)
+                    Car(car_idx).subcmd_req += "®Ææ◊¶Ì"
+                End If
+
+            Else
 
 
-                    Car(car_idx).To_AGV(20) = 111
-                    settext(Car(car_idx).device_no.ToString + ":" + Car(car_idx).get_tagId.ToString + "TO DEST " + cmd_to_point.ToString)
-                    'ÁÑ°Âà∞ÈÅîË∑ØÂæë
+                Car(car_idx).To_AGV(20) = 111
+                'µL®ÏπF∏ÙÆ|
+            End If
+
+                '----------------------------------------------------------
+                '≥B≤z•RπqØ∏
+                If Not (Car(car_idx).subcmd = "" Or Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString()) Then
+
+
+                    For k As Integer = 0 To ChargerClient.Length - 1
+                        If ChargerClient(k).HoldingResponse(7) > 0 Then
+                            Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, ChargerClient(k).tag_id.ToString, Car(car_idx).width, Car(car_idx).height, Tag_point_list)
+                        End If
+                    Next
+                    If Car(car_idx).subcmd = "" Or Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString() Then
+                        settext(Car(car_idx).device_no.ToString + ":•Rπqπq∑•¶˘•X", True, Car(car_idx).device_no)
+                        Car(car_idx).subcmd_req = "µ••Rπqπq¿ª¡Y¶^"
+                    End If
                 End If
 
 
@@ -5000,77 +6853,51 @@ Public Class Form1
                                 ' da()
                             Else
 
-                                Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, Door_List(k).tagid.ToString)
+                                Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, Door_List(k).tagid.ToString, Car(car_idx).width, Car(car_idx).height, Tag_point_list)
 
                             End If
                         End If
 
                     Next
                     If Car(car_idx).subcmd = "" Or Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString() Then
-                        settext(Car(car_idx).device_no.ToString + ":ÁÑ°Ë∑ØÂæëdoor", True, Car(car_idx).device_no)
-                        Car(car_idx).subcmd_req = "Á≠âÈñãÈñÄ"
+                        settext(Car(car_idx).device_no.ToString + ":µL∏ÙÆ|door", True, Car(car_idx).device_no)
+                        Car(car_idx).subcmd_req = "µ•∂}™˘"
                     End If
                 End If
-                'ËôïÁêÜÂÖÖÈõªÁ´ô
-                'ChargerClient(i).HoldingResponse(7)
-
-                If Not (Car(car_idx).subcmd = "" Or Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString()) Then
-
-
-                    For k As Integer = 0 To ChargerClient.Length - 1
-                        If ChargerClient(k).flag Then
-                            If ChargerClient(i).HoldingResponse(7) = 0 Then
-                                ' da()
-
-                            Else
-
-                                Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, ChargerClient(k).tag_id.ToString)
-                                Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, (ChargerClient(k).tag_id + 1).ToString)
-                                Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, (ChargerClient(k).tag_id - 1).ToString)
-                            End If
-                        End If
-
-                    Next
-                    If Car(car_idx).subcmd = "" Or Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString() Then
-                        settext(Car(car_idx).device_no.ToString + ":ÂÖÖÈõªÁ´ôÈõªÊ•µ‰º∏Âá∫", True, Car(car_idx).device_no)
-                        Car(car_idx).subcmd_req = "ÈõªÊ•µ‰º∏Âá∫"
-                    End If
-                End If
-
-                'ËôïÁêÜÈõªÊ¢Ø
+                '≥B≤zπq±Ë
                 If Not (Car(car_idx).subcmd = "" Or Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString()) Then
                     For k As Integer = 0 To LFT_List.Length - 1
                         If LFT_List(k).flag Then
-                            'Â¶ÇÊûúÊ≤íÊúâ‰∫∫È†êÁ¥Ñ Â∞±Âè™Êìã1000
-                            'Â¶ÇÊûúÊúâ‰∫∫È†êÁ¥ÑÂ∞±ÊìãÈô§‰∫ÜOPENÁöÑÊ®ìÂ±§
+                            '¶p™G®S¶≥§Hπw¨˘ ¥N•uæ◊1000
+                            '¶p™G¶≥§Hπw¨˘¥Næ◊∞£§FOPEN™∫º”ºh
                             If LFT_List(k).control_flag = -1 Or LFT_List(k).open_sensor = 0 Then
-                                'ÈõªÊ¢ØÊ≤íË¢´ËªäÂ≠êÈ†êÁ¥ÑÊàñÊòØÊ≤íÈñãÈñÄ
-                                Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, LFT_List(k).tagid.ToString)
+                                'πq±Ë®S≥Q®Æ§lπw¨˘©Œ¨O®S∂}™˘
+                                Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, LFT_List(k).tagid.ToString, Car(car_idx).width, Car(car_idx).height, Tag_point_list)
                             Else
-                                'ÈõªÊ¢ØË¢´ËªäÂ≠êÈ†êÁ¥Ñ
+                                'πq±Ë≥Q®Æ§lπw¨˘
                                 If LFT_List(k).control_flag = car_idx Then
-                                    'È†êÁ¥ÑÈõªÊ¢ØÁöÑËªäÂ≠ê
+                                    'πw¨˘πq±Ë™∫®Æ§l
                                     If LFT_List(k).open_sensor = Query_Floor(Car(car_idx).get_tagId) Or Car(car_idx).get_tagId = LFT_List(k).tagid Or Car(car_idx).get_tagId = LFT_List(k).tagid + 10000 Then
-                                        'Áõ∏ÂêåÊ®ìÂ±§‰∏îÈñãÈñÄ 1000 ‰∏çÊìã
+                                        '¨€¶Pº”ºh•B∂}™˘ 1000 §£æ◊
                                     Else
-                                        Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, LFT_List(k).tagid.ToString)
+                                        Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, LFT_List(k).tagid.ToString, Car(car_idx).width, Car(car_idx).height, Tag_point_list)
                                     End If
                                     ' Dim debug As Integer = Query_Floor(Car(car_idx).To_pos)
 
                                     For ii As Integer = 1 To 7
                                         If Query_Floor(Car(car_idx).get_tagId) = ii Then
-                                            settext((ii + LFT_List(k).tagid).ToString + "‰∏çÊìã1", True, Car(car_idx).device_no)
+                                            settext((ii + LFT_List(k).tagid).ToString + "§£æ◊1", True, Car(car_idx).device_no)
                                         ElseIf (Car(car_idx).get_tagId = LFT_List(k).tagid Or Car(car_idx).get_tagId = LFT_List(k).tagid + 10000) And select_to_floor(Car(car_idx).main_subcmd, LFT_List(k).tagid) = LFT_List(k).open_sensor Then
-                                            'Â¶ÇÊûúËªäÂ≠êÂú®ÈõªÊ¢ØÂÖß‰∏îÈñãÈñÄÁöÑÊ®ìÂ±§ÊòØÂá∫Âè£ÁöÑÊ®ìÂ±§Â∞±‰∏çÊìã
-                                            settext((ii + LFT_List(k).tagid).ToString + "‰∏çÊìã2", True, Car(car_idx).device_no)
+                                            '¶p™G®Æ§l¶bπq±Ë§∫•B∂}™˘™∫º”ºh¨O•X§f™∫º”ºh¥N§£æ◊
+                                            settext((ii + LFT_List(k).tagid).ToString + "§£æ◊2", True, Car(car_idx).device_no)
                                         Else
-                                            Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, (ii + LFT_List(k).tagid).ToString)
+                                            Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, (ii + LFT_List(k).tagid).ToString, Car(car_idx).width, Car(car_idx).height, Tag_point_list)
                                         End If
                                     Next
                                 Else
                                     '  Dim lft_path As String = ""
                                     For ii As Integer = LFT_List(k).tagid To LFT_List(k).tagid + 7
-                                        Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, ii.ToString)
+                                        Car(car_idx).subcmd = Check_Path(Car(car_idx).subcmd, ii.ToString, Car(car_idx).width, Car(car_idx).height, Tag_point_list)
                                     Next
                                 End If
                             End If
@@ -5085,8 +6912,8 @@ Public Class Form1
 
                     Next
                     If Car(car_idx).subcmd = "" Or Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString Then
-                        Car(car_idx).subcmd_req = "Á≠âÂæÖÈõªÊ¢Ø"
-                        settext(Car(car_idx).device_no.ToString + ":ÁÑ°Ë∑ØÂæëLFT", True, Car(car_idx).device_no)
+                        Car(car_idx).subcmd_req = "µ•´›πq±Ë"
+                        settext(Car(car_idx).device_no.ToString + ":µL∏ÙÆ|LFT", True, Car(car_idx).device_no)
                     End If
                 End If
                 'If Car(car_idx).subcmd.Length > 4 * 5 Then
@@ -5094,55 +6921,58 @@ Public Class Form1
                 'End If
                 If Not (Car(car_idx).subcmd = "" Or Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString) Then
 
-                    If Car(car_idx).subcmd.Split(",").Length > PathLen And Car(car_idx).sflag = 0 Then
+                    If Car(car_idx).subcmd.Split(",").Length > (Car(car_idx).MaxPath + 5) And Car(car_idx).sflag = 0 Then
                         Dim path_temp() As String = Car(car_idx).subcmd.Split(",")
-                        Car(car_idx).subcmd = Car(car_idx).subcmd.Remove(Car(car_idx).subcmd.IndexOf("," + path_temp(PathLen - 1) + ",")) ' ÁßªÈô§
-                    ElseIf Car(car_idx).subcmd.Split(",").Length > RetreatPath And Car(car_idx).sflag = 1 Then
+                        Car(car_idx).subcmd = Car(car_idx).subcmd.Remove(Car(car_idx).subcmd.IndexOf("," + path_temp(Car(car_idx).MaxPath - 1) + ",")) ' ≤æ∞£
+                    ElseIf Car(car_idx).subcmd.Split(",").Length > Car(car_idx).RetreatPath And Car(car_idx).sflag = 1 Then
                         Dim path_temp() As String = Car(car_idx).subcmd.Split(",")
-                        Car(car_idx).subcmd = Car(car_idx).subcmd.Remove(Car(car_idx).subcmd.IndexOf("," + path_temp(RetreatPath - 1) + ",")) ' ÁßªÈô§
+                        Dim idx As Integer = Car(car_idx).subcmd.IndexOf("," + path_temp(Car(car_idx).RetreatPath - 1) + ",")
+                        If idx > 0 Then
+                            Car(car_idx).subcmd = Car(car_idx).subcmd.Remove(Car(car_idx).subcmd.IndexOf("," + path_temp(Car(car_idx).RetreatPath - 1) + ",")) ' ≤æ∞£
+                        Else
+                            Car(car_idx).subcmd = ""
+                        End If
+
                     End If
 
 
                     If Car(car_idx).subcmd = "" Or Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString Then
-                        settext(Car(car_idx).device_no.ToString + ":ÁÑ°Ë∑ØÂæëtemp_path 5", True, Car(car_idx).device_no)
+                        settext(Car(car_idx).device_no.ToString + ":µL∏ÙÆ|temp_path 5", True, Car(car_idx).device_no)
                     End If
                 End If
-                'Ê±∫ÂÆöÊö´ÊôÇË∑ØÂæë
+                '®M©wº»Æ…∏ÙÆ|
                 Send2AGV = Car(car_idx).subcmd
                 If Car(car_idx).get_tagId = cmd_to_point Then
-                    'ÁõÆÁöÑÂú∞Ë∑üÁèæÂú®Âú∞‰∏ÄËá¥
+                    '•ÿ™∫¶a∏Ú≤{¶b¶a§@≠P
                     ' Car(car_idx).cmd_idx += 1
                     Car(car_idx).move_flag = True
                     Car(car_idx).Wait_count = 0
                     Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
 
-                    settext(Car(car_idx).device_no.ToString + ":ÁÑ°Ë∑ØÂæë6" + "-cmd_to_point" + cmd_to_point.ToString, True, Car(car_idx).device_no)
+                    settext(Car(car_idx).device_no.ToString + ":µL∏ÙÆ|6" + "-cmd_to_point" + cmd_to_point.ToString, True, Car(car_idx).device_no)
 
                 ElseIf Car(car_idx).subcmd = "" Or Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString Then
                     If Car(car_idx).get_status = 4 Then
-                        Car(car_idx).step_i = 902 'Â¶ÇÂúãÊ≤íÊúâË∑ØÂæëÔºåÂ∞±Âº∑ÂÅú
+                        Car(car_idx).step_i = 902 '¶p∞Í®S¶≥∏ÙÆ|°A¥N±j∞±
                     End If
                     Car(car_idx).subcmd = Car(car_idx).get_tagId.ToString
 
-                    settext(Car(car_idx).device_no.ToString + ":ÁÑ°Ë∑ØÂæë7", True, Car(car_idx).device_no)
+                    settext(Car(car_idx).device_no.ToString + ":µL∏ÙÆ|7", True, Car(car_idx).device_no)
 
                 ElseIf Not Car(car_idx).subcmd = "" Then
                     path_ary = Car(car_idx).subcmd.Split(",")
                     Dim sensor_offset As Integer = 0
-
                     If Car(car_idx).get_pin = 10 And Car(car_idx).cmd_Shelf_Car_No And Car(car_idx).get_loading = 3 And Car(car_idx).Car_type = "FORK" Then
                         sensor_offset = Query_shelf_sensoroffset(Car(car_idx).cmd_Shelf_Car_No)
                     ElseIf Car(car_idx).get_pin = 10 And Car(car_idx).cmd_Shelf_Car_No And Not Car(car_idx).Car_type = "FORK" Then
                         sensor_offset = Query_shelf_sensoroffset(Car(car_idx).cmd_Shelf_Car_No)
                     End If
-
-
                     If sensor_offset > 0 Then
                         settext(Car(car_idx).device_no.ToString + ":sensor_offset=" + sensor_offset.ToString, True, Car(car_idx).device_no)
                     End If
 
                     If Not path_ary.Length = 1 Then
-                        'Ë∂ÖÈÅéÂÖ©ÂÄãÈªû‰Ωç    
+                        '∂WπL®‚≠”¬I¶Ï    
                         For i = 0 To path_ary.Length - 2
                             Dim flag As Boolean = False
                             If i <= (path_ary.Length - 3) Then
@@ -5153,11 +6983,11 @@ Public Class Form1
                                         If path_S(j).M2_Point = "" Then
                                             path_output += "@" + path_S(j).From_Point.ToString + "," + path_S(j).direction0.ToString + "," + path_S(j).action0 + (CInt(path_S(j).Sensor0) + sensor_offset).ToString + "," + path_S(j).speed0.ToString
                                             path_output += "@" + path_S(j).M_Point.ToString + "," + path_S(j).direction1.ToString + "," + path_S(j).action1 + (CInt(path_S(j).Sensor1) + sensor_offset).ToString + "," + path_S(j).speed1.ToString
-                                            settext(Car(car_idx).device_no.ToString + ":ÁâπÊÆäË∑ØÂæëÊèõ", True, Car(car_idx).device_no)
+                                            settext(Car(car_idx).device_no.ToString + ":ØSÆÌ∏ÙÆ|¥´", True, Car(car_idx).device_no)
                                         Else
 
-                                            'Â¶ÇÊûúÊúâM2Â∞±ÂÖ®ÈÉ®Áî®M2Âèñ‰ª£
-                                            settext(Car(car_idx).device_no.ToString + ":ÁâπÊÆäË∑ØÂæëÂèñ‰ª£", True, Car(car_idx).device_no)
+                                            '¶p™G¶≥M2¥N•˛≥°•ŒM2®˙•N
+                                            settext(Car(car_idx).device_no.ToString + ":ØSÆÌ∏ÙÆ|®˙•N", True, Car(car_idx).device_no)
                                             path_output += path_S(j).M2_Point
                                         End If
                                         i += 1
@@ -5167,64 +6997,45 @@ Public Class Form1
                             End If
 
                             If flag = False And i <= (path_ary.Length - 2) Then
-                                If Car(car_idx).Car_type = "FORK" Or Car(car_idx).Car_type = "LOWCAR" Then
-                                    'For j As Integer = 0 To path_fork_base.Length - 1
-                                    '    If path_fork_base(j).From_Point = path_ary(i) And path_fork_base(j).To_Point = path_ary(i + 1) And Not path_fork_base(j).speed0 = 0 Then
-                                    '        path_output += "@" + path_ary(i).ToString + ",0," + path_fork_base(j).action0 + (CInt(path_fork_base(j).Sensor0) + sensor_offset).ToString + "," + (path_fork_base(j).speed0 + path_fork_base(j).offsetdistance * 256).ToString
-                                    '        last_direction = 0
-                                    '    ElseIf path_fork_base(j).To_Point = path_ary(i) And path_fork_base(j).From_Point = path_ary(i + 1) And Not path_fork_base(j).speed1 = 0 Then
-                                    '        path_output += "@" + path_ary(i).ToString + ",1," + path_fork_base(j).action1 + (CInt(path_fork_base(j).Sensor1) + sensor_offset).ToString + "," + (path_fork_base(j).speed1 + path_fork_base(j).offsetdistance * 256).ToString
-                                    '        last_direction = 1
-                                    '    End If
-                                    'Next
-                                    Dim key1 As Integer = path_ary(i) * 100000 + CInt(path_ary(i + 1))
-                                    Dim key2 As Integer = path_ary(i + 1) * 100000 + CInt(path_ary(i))
-                                    If Path_fork_Dictionary.ContainsKey(path_ary(i) * 100000 + path_ary(i + 1)) Then
+                                If Car(car_idx).Car_type = "FORK" Then
+                                    For j As Integer = 0 To path_fork_base.Length - 1
+                                        If path_fork_base(j).From_Point = path_ary(i) And path_fork_base(j).To_Point = path_ary(i + 1) And Not path_fork_base(j).speed0 = 0 Then
+                                            path_output += "@" + path_ary(i).ToString + ",0," + path_fork_base(j).action0 + (CInt(path_fork_base(j).Sensor0) + sensor_offset).ToString + "," + path_fork_base(j).speed0.ToString
+                                            last_direction = 0
+                                        ElseIf path_fork_base(j).To_Point = path_ary(i) And path_fork_base(j).From_Point = path_ary(i + 1) And Not path_fork_base(j).speed1 = 0 Then
+                                            path_output += "@" + path_ary(i).ToString + ",1," + path_fork_base(j).action1 + (CInt(path_fork_base(j).Sensor1) + sensor_offset).ToString + "," + path_fork_base(j).speed1.ToString
+                                            last_direction = 1
+                                        End If
+                                    Next
+                                ElseIf Not Car(car_idx).fast_subcmd = "" Then
 
-                                        path_output += "@" + path_ary(i).ToString + ",0," + Path_fork_Dictionary(key1).action0 + (CInt(Path_fork_Dictionary(key1).Sensor0) + sensor_offset).ToString + "," + Path_fork_Dictionary(key1).speed0.ToString
-                                        last_direction = 0
+                                    For j As Integer = 0 To path_base.Length - 1
+                                        If path_base(j).From_Point = path_ary(i) And path_base(j).To_Point = path_ary(i + 1) Then
+                                            path_output += "@" + path_ary(i).ToString + ",0," + path_base(j).action0 + (CInt(path_base(j).Sensor0) + sensor_offset).ToString + ",30"
+                                            last_direction = 0
+                                        ElseIf path_base(j).To_Point = path_ary(i) And path_base(j).From_Point = path_ary(i + 1) Then
+                                            path_output += "@" + path_ary(i).ToString + ",1," + path_base(j).action1 + (CInt(path_base(j).Sensor1) + sensor_offset).ToString + ",30"
+                                            last_direction = 1
+                                        End If
+                                    Next
 
-                                    ElseIf Path_fork_Dictionary.ContainsKey(path_ary(i + 1) * 100000 + path_ary(i)) Then
-
-                                        path_output += "@" + path_ary(i).ToString + ",1," + Path_fork_Dictionary(key2).action1 + (CInt(Path_fork_Dictionary(key2).Sensor1) + sensor_offset).ToString + "," + Path_fork_Dictionary(key2).speed1.ToString
-                                        last_direction = 1
-
-
-                                    Else
-                                        settext("ÈåØË™§ÔºåÁÑ°Ê≥ïÁΩÆ‰ø°ÁöÑÈåØË™§fork")
-                                    End If
                                 Else
-                                    'For j As Integer = 0 To path_base.Length - 1
-                                    '    If path_base(j).From_Point = path_ary(i) And path_base(j).To_Point = path_ary(i + 1) Then
-                                    '        path_output += "@" + path_ary(i).ToString + ",0," + path_base(j).action0 + (CInt(path_base(j).Sensor0) + sensor_offset).ToString + "," + path_base(j).speed0.ToString
-                                    '        last_direction = 0
-                                    '    ElseIf path_base(j).To_Point = path_ary(i) And path_base(j).From_Point = path_ary(i + 1) Then
-                                    '        path_output += "@" + path_ary(i).ToString + ",1," + path_base(j).action1 + (CInt(path_base(j).Sensor1) + sensor_offset).ToString + "," + path_base(j).speed1.ToString
-                                    '        last_direction = 1
-                                    '    End If
-                                    'Next
-                                    Dim key1 As Integer = path_ary(i) * 100000 + CInt(path_ary(i + 1))
-                                    Dim key2 As Integer = path_ary(i + 1) * 100000 + CInt(path_ary(i))
-                                    If Path_base_Dictionary.ContainsKey(path_ary(i) * 100000 + path_ary(i + 1)) Then
+                                    For j As Integer = 0 To path_base.Length - 1
+                                        If path_base(j).From_Point = path_ary(i) And path_base(j).To_Point = path_ary(i + 1) Then
+                                            path_output += "@" + path_ary(i).ToString + ",0," + path_base(j).action0 + (CInt(path_base(j).Sensor0) + sensor_offset).ToString + "," + path_base(j).speed0.ToString
+                                            last_direction = 0
+                                        ElseIf path_base(j).To_Point = path_ary(i) And path_base(j).From_Point = path_ary(i + 1) Then
+                                            path_output += "@" + path_ary(i).ToString + ",1," + path_base(j).action1 + (CInt(path_base(j).Sensor1) + sensor_offset).ToString + "," + path_base(j).speed1.ToString
+                                            last_direction = 1
+                                        End If
+                                    Next
 
-                                        path_output += "@" + path_ary(i).ToString + ",0," + Path_base_Dictionary(key1).action0 + (CInt(Path_base_Dictionary(key1).Sensor0) + sensor_offset).ToString + "," + Path_base_Dictionary(key1).speed0.ToString
-                                        last_direction = 0
-
-                                    ElseIf Path_base_Dictionary.ContainsKey(path_ary(i + 1) * 100000 + path_ary(i)) Then
-
-                                        path_output += "@" + path_ary(i).ToString + ",1," + Path_base_Dictionary(key2).action1 + (CInt(Path_base_Dictionary(key2).Sensor1) + sensor_offset).ToString + "," + Path_base_Dictionary(key2).speed1.ToString
-                                        last_direction = 1
-
-
-                                    Else
-                                        settext("ÈåØË™§ÔºåÁÑ°Ê≥ïÁΩÆ‰ø°ÁöÑÈåØË™§base")
-                                    End If
                                 End If
                             End If
                         Next
 
                     End If
-                    'Êñ∞Â¢ûÂÅúÊ≠¢TAG
+                    '∑sºW∞±§ÓTAG
                     If last_direction = 0 Then
                         path_output += "@" + path_ary(path_ary.Length - 1) + ",1,S0,5"
                     Else
@@ -5232,24 +7043,14 @@ Public Class Form1
                         'path_output += "@" + path_ary(path_ary.Length - 1) + ",0,S0,5"
                     End If
                     Car(car_idx).To_temp_pos = CInt(path_ary(path_ary.Length - 1))
-
-                    'Â≠ó‰∏≤ËΩâÊàêÂëΩ‰ª§Èªû‰ΩçÂÇ≥ÂÖ•AGVÔºå‰∏¶ÂïüÂãïAGV
+                    settext(Car(car_idx).device_no.ToString + ":≥Wπ∫∏ÙÆ|" + path_output.Substring(1), True, Car(car_idx).device_no)
+                    '¶r¶Í¬‡¶®©R•O¬I¶Ï∂«§JAGV°A®√±“∞ AGV
                     If cmdtype = 11 Then
-                        'ÂãïÊÖãËÆäÊõ¥()
                         If Not Car(car_idx).subcmd = old_subcmd Then
-                            settext(Car(car_idx).device_no.ToString + ":Ë¶èÂäÉË∑ØÂæë" + path_output.Substring(1), True, Car(car_idx).device_no)
                             Car(car_idx).cmd2Car(path_output.Substring(1), cmdtype)
                         End If
+
                     Else
-                        If path_ary.Length > 1 Then
-
-                            If Query_Floor(path_ary(1)) > 0 Then
-                                Car(car_idx).To_AGV(3) = Query_Floor(path_ary(1))
-                            End If
-
-                        End If
-                        settext(Car(car_idx).device_no.ToString + ":Ë¶èÂäÉË∑ØÂæë" + path_output.Substring(1), True, Car(car_idx).device_no)
-
                         Car(car_idx).cmd2Car(path_output.Substring(1), cmdtype)
                     End If
 
@@ -5264,7 +7065,6 @@ Public Class Form1
 
 
     End Function
-
     Function Get_group_path(ByVal subcmd As String) As String
         Get_group_path = subcmd
         For i As Integer = 0 To group_path.Length - 1
@@ -5275,11 +7075,23 @@ Public Class Form1
 
 
     End Function
+    Function Get_Car_path(ByVal subcmd As String, ByVal h As Integer, ByVal w As Integer) As String
+        Get_Car_path = subcmd
+        If Not subcmd = "" Then
+            Dim subcmd_list() As String = subcmd.Split(",")
+            For i As Integer = 0 To subcmd_list.Length - 1
+                For j As Integer = 0 To Tag_ID_List.Length
+
+                Next
+            Next
+        End If
+    End Function
+
     Function CheckCarInDoor(ByVal CarTagID As Integer)
         CheckCarInDoor = False
         For i As Integer = 0 To Door_List.Length - 1
             If Door_List(i).flag Then
-                'door 25  car tagid ‰ΩçÊñº 23 27‰πãÈñì
+                'door 25  car tagid ¶Ï©Û 23 27§ß∂°
                 If CarTagID >= Door_List(i).tagid - 2 And CarTagID <= Door_List(i).tagid + 2 Then
 
                     CheckCarInDoor = True
@@ -5292,14 +7104,14 @@ Public Class Form1
         CheckCarInLft = False
         For i As Integer = 0 To LFT_List.Length - 1
             If LFT_List(i).flag Then
-                'LFT 1000  car tagid ‰ΩçÊñº 1000 1009‰πãÈñì
+                'LFT 1000  car tagid ¶Ï©Û 1000 1009§ß∂°
                 If CarTagID >= LFT_List(i).tagid And CarTagID <= LFT_List(i).tagid + 9 Then
-                    'Âà§Êñ∑ÊòØÂê¶Â∑≤Á∂ìÂÆåÊàêÈõªÊ¢Ø
+                    'ßP¬_¨Oß_§w∏gßπ¶®πq±Ë
                     If maincmd.IndexOf(CarTagID.ToString + "," + LFT_List(i).tagid.ToString) > 0 Then
-                        'Êú™ÂÆåÊàêÈõªÊ¢ØÔºåÈõªÊ¢ØÁ®ãÂ∫è
+                        '•ºßπ¶®πq±Ë°Aπq±Ëµ{ß«
                         CheckCarInLft = True
                     Else
-                        'ÂÆåÊàêÈõªÊ¢ØÔºåÈÇ£Â∞±‰∏çÊòØÈõªÊ¢ØÁ®ãÂ∫è
+                        'ßπ¶®πq±Ë°A®∫¥N§£¨Oπq±Ëµ{ß«
                         CheckCarInLft = False
                     End If
 
@@ -5339,7 +7151,14 @@ Public Class Form1
         Next
         Return False
     End Function
-
+    Function In_String(ByVal str As String, ByVal val As String, Optional ByVal split As String = ",") As Boolean
+        Dim str_list() As String
+        str_list = str.Split(split)
+        If Array.IndexOf(str_list, val) > -1 Then
+            Return True
+        End If
+        Return False
+    End Function
     Function Door_In_Array(ByVal str_ary() As String, ByVal val As String, ByVal offset As Integer, Optional ByVal check_count As Integer = 99)
         Dim i As Integer = 0
         For j As Integer = CInt(val) - offset To CInt(val) + offset
@@ -5362,7 +7181,7 @@ Public Class Form1
     Private Sub Button13_Click_2(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Send2AGV(view_car_idx, 11)
     End Sub
-    Function Send_CMD(ByVal car_no As Integer, ByVal From_Point As Integer, ByVal To_Point As Integer, Optional ByVal ext_cmd As String = "")
+    Function Send_CMD(ByVal car_no As Integer, ByVal From_Point As Integer, ByVal To_Point As Integer, Optional ByVal user As String = "AGVC", Optional ByVal Pri_Wt As Integer = 50)
         Send_CMD = 0
         Dim oConn As MySqlConnection
         Dim sqlCommand As New MySqlCommand
@@ -5378,15 +7197,13 @@ Public Class Form1
 
             If From_Point < 10 Then
 
-                Query = "INSERT INTO `agv_cmd_list` ( AGVNo,`CmdFrom`, `CmdTo`, `Pri_Wt`,RequestTime, `Requestor`) VALUES ('" + car_no.ToString + "','" + From_Point.ToString + "', '" + To_Point.ToString + "', '50',now(), 'AGVC');"
-
-                Query = " insert into agv_cmd_list(AGVNo,CmdFrom,	CmdTo,Pri_Wt,RequestTime,Requestor,RequestName,ext_cmd)					"
-                Query += " SELECT A.`AGVNo` , " + From_Point.ToString + " AS from_point, " + To_Point.ToString + ",'50',now(), 'AGVC_S','AGVC_S' ,'" + ext_cmd + "'"
+                Query = "INSERT INTO `agv_cmd_list` ( AGVNo,`CmdFrom`, `CmdTo`, `Pri_Wt`,RequestTime, `Requestor`) VALUES ('" + car_no.ToString + "','" + From_Point.ToString + "', '" + To_Point.ToString + "', " + Pri_Wt.ToString + ",now(), '" + user + "');"
+                Query = " insert into agv_cmd_list(AGVNo,CmdFrom,	CmdTo,Pri_Wt,RequestTime,Requestor,RequestName)	 "
+                Query += " SELECT A.`AGVNo` , " + From_Point.ToString + " AS from_point, " + To_Point.ToString + "," + Pri_Wt.ToString + ",now(),  '" + user + "', '" + user + "' "
                 Query += " FROM `agv_list` A LEFT JOIN agv_cmd_list B ON A.`AGVNo` = B.`AGVNo`"
                 Query += " WHERE A.`AGVNo` =" + car_no.ToString
-                Query += " and not " + To_Point.ToString + " in (select CmdTo FROM `agv_cmd_list` ) "
-                Query += " and " + To_Point.ToString + " in (select Tag_ID FROM `point` ) "
-                Query += " and not " + To_Point.ToString + " in (select Position FROM `agv_list` ) limit 0,1"
+                Query += " and " + To_Point.ToString + " in (select Tag_ID FROM `point` ) limit 0,1 "
+                ' Query += " and not " + To_Point.ToString + " in (select Position FROM `agv_list` ) limit 0,1"
                 sqlCommand.CommandText = Query
                 'Cmd_status.AppendText("Query=" + Query)
                 Send_CMD = sqlCommand.ExecuteNonQuery()
@@ -5406,17 +7223,17 @@ Public Class Form1
                 to_cnt = CInt(mysql_data)
                 'Cmd_status.AppendText(Query + ":" + to_cnt.ToString + vbCrLf)
                 If from_cnt = 1 And to_cnt = 0 Then
-                    'TO Èªû‰ΩçÊ≤íÊúâÊû∂Âè∞
-                    Query = "insert into  `agv_cmd_list`(`AGVNo`,`CmdFrom`,`CmdTo`,`Pri_Wt`,`Requestor`,`Shelf_Car_No`,`Shelf_Car_type`,`Shelf_Car_Size`) select '" + car_no.ToString + "' as AGVNo,'" + From_Point.ToString + "','" + To_Point.ToString + "',50,'AGVC',Shelf_Car_No,`Shelf_Car_type`,`Shelf_Car_Size` from `shelf_car` where LOCATION='" + From_Point.ToString + "' "
+                    'TO ¬I¶Ï®S¶≥¨[•x
+                    Query = "insert into  `agv_cmd_list`(`AGVNo`,`CmdFrom`,`CmdTo`,`Pri_Wt`,`Requestor`,`Shelf_Car_No`,`Shelf_Car_type`,`Shelf_Car_Size`) select '" + car_no.ToString + "' as AGVNo,'" + From_Point.ToString + "','" + To_Point.ToString + "'," + Pri_Wt.ToString + ",'" + user + "',Shelf_Car_No,`Shelf_Car_type`,`Shelf_Car_Size` from `shelf_car` where LOCATION='" + From_Point.ToString + "' "
                     sqlCommand.CommandText = Query
                     Send_CMD = sqlCommand.ExecuteNonQuery()
                     '  Cmd_status.AppendText(Query + ":" + Send_CMD.ToString + vbCrLf)
                 ElseIf from_cnt = 0 Then
                     Send_CMD = 0
-                    '   Cmd_status.AppendText("‰æÜÊ∫êÁ´ØÁÑ°Êû∂Âè∞" + vbCrLf)
+                    '   Cmd_status.AppendText("®”∑Ω∫›µL¨[•x" + vbCrLf)
                 ElseIf to_cnt = 1 Then
                     Send_CMD = 0
-                    '  Cmd_status.AppendText("ÁõÆÁöÑÁ´ØÊû∂Âè∞" + vbCrLf)
+                    '  Cmd_status.AppendText("•ÿ™∫∫›¨[•x" + vbCrLf)
                 End If
             End If
 
@@ -5428,7 +7245,96 @@ Public Class Form1
         oConn.Close()
         oConn.Dispose()
     End Function
+    Function Send_CMD_CST(ByVal car_no As Integer, ByVal From_Point As Integer, ByVal To_Point As Integer, ByVal CST As String, ByVal mcscmdkey As String, Optional ByVal Pri_Wt As Integer = 50, Optional ByVal user As String = "MCS")
+        Send_CMD_CST = 0
+        Dim oConn As MySqlConnection
+        Dim sqlCommand As New MySqlCommand
 
+        oConn = New MySqlConnection(Mysql_str)
+        oConn.Open()
+        sqlCommand.Connection = oConn
+        Dim Query As String = ""
+        ' Dim mysql_data As Object
+        Try
+
+
+            Query = " insert into agv_cmd_list(AGVNo,CmdFrom,CmdTo,RollData,Pri_Wt,RequestTime,Requestor,RequestName,mcscmdkey)	"
+            Query += " SELECT A.`AGVNo` , " + From_Point.ToString + " AS from_point, " + To_Point.ToString + ",'" + CST + "','" + Pri_Wt.ToString + "',now(), '" + user + "','" + user + "' ,'" + mcscmdkey + "'"
+            Query += " FROM `agv_list` A LEFT JOIN agv_cmd_list B ON A.`AGVNo` = B.`AGVNo`"
+            Query += " WHERE A.`AGVNo` =" + car_no.ToString
+            Query += " and not " + To_Point.ToString + " in (select CmdTo FROM `agv_cmd_list` ) "
+            Query += " and " + To_Point.ToString + " in (select Tag_ID FROM `point` ) "
+            Query += "  limit 0,1"
+            sqlCommand.CommandText = Query
+            'Cmd_status.AppendText("Query=" + Query)
+            Send_CMD_CST = sqlCommand.ExecuteNonQuery()
+            ListView1_ReNew()
+
+        Catch ex As Exception
+            Send_CMD_CST = 0
+            'Cmd_status.AppendText("Query=" + Query + ":" + ex.Message)
+        End Try
+
+        oConn.Close()
+        oConn.Dispose()
+    End Function
+    Function Install_CMD(ByVal carrier As Object)
+        Dim temp As GEM.Carrier = carrier
+        Install_CMD = 0
+        Dim oConn As MySqlConnection
+        Dim sqlCommand As New MySqlCommand
+
+        oConn = New MySqlConnection(Mysql_str)
+        oConn.Open()
+        sqlCommand.Connection = oConn
+        Dim Query As String = ""
+
+        Try
+
+
+            Query = "INSERT INTO `transfer` (`COMMANDID`, `PRIORITY`, `CARRIERID`, `SOURCE`, `DEST`, `NEXT_DEST`, `CARRIERTYPE`, `EMPTYFLAG`, `PROCESSID`, `ttransferState`,Req_time) "
+            Query += " VALUES ('" + temp.CommandID + "', '" + temp.PRIORITY.ToString + "', '" + temp.CarrierID + "', '" + temp.SOURCE + "', '" + temp.DEST + "', '" + temp.NEXTDest + "', '" + temp.CarrierType + "', '" + temp.EmptyCarrier + "', '" + temp.PROCESSID + "', '1',now());"
+
+            sqlCommand.CommandText = Query
+            'Cmd_status.AppendText("Query=" + Query)
+            Install_CMD = sqlCommand.ExecuteNonQuery()
+
+
+        Catch ex As Exception
+            Install_CMD = 0
+            'Cmd_status.AppendText("Query=" + Query + ":" + ex.Message)
+        End Try
+
+        oConn.Close()
+        oConn.Dispose()
+    End Function
+    Function update_CMD(ByVal COMMANDID As String, ByVal ttransferState As Integer)
+        update_CMD = 0
+        Dim oConn As MySqlConnection
+        Dim sqlCommand As New MySqlCommand
+
+        oConn = New MySqlConnection(Mysql_str)
+        oConn.Open()
+        sqlCommand.Connection = oConn
+        Dim Query As String = ""
+
+        Try
+
+
+            Query = "update `transfer` set ttransferState =" + ttransferState.ToString + " where COMMANDID ='" + COMMANDID + "'"
+            sqlCommand.CommandText = Query
+            'Cmd_status.AppendText("Query=" + Query)
+            update_CMD = sqlCommand.ExecuteNonQuery()
+
+
+        Catch ex As Exception
+            update_CMD = 0
+            'Cmd_status.AppendText("Query=" + Query + ":" + ex.Message)
+        End Try
+
+        oConn.Close()
+        oConn.Dispose()
+    End Function
     Private Sub Button16_Click_2(ByVal sender As System.Object, ByVal e As System.EventArgs)
         MsgBox(Send_CMD(CInt(txtCar.Text), CInt(From_cb.Text), CInt(To_cb.Text)))
     End Sub
@@ -5457,9 +7363,7 @@ Public Class Form1
 
 
 
-    Private Sub Button13_Click_3(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button13.Click
-        Car(view_car_idx).To_AGV(3) = Query_Floor(Car(view_car_idx).get_tagId)
-    End Sub
+    
 
 
 
@@ -5467,16 +7371,14 @@ Public Class Form1
         If Car(view_car_idx).flag Then
             Car(view_car_idx).To_AGV(6) = 0
         Else
-            MsgBox(view_car_idx.ToString + "ËôüËªäÊú™ÂïüÁî®")
+            MsgBox(view_car_idx.ToString + "∏π®Æ•º±“•Œ")
 
         End If
     End Sub
 
-    Private Sub PictureBox3_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles PictureBox3.Click
-        Floor_Map.Text = Car(view_car_idx).Car_Picbox.Top + offset_y + 15 - 250
-    End Sub
+ 
 
-    Private Sub Car12_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car12.Click
+    Private Sub Car12_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5488,7 +7390,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car13_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car13.Click
+    Private Sub Car13_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5500,7 +7402,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car15_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car15.Click
+    Private Sub Car15_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5512,7 +7414,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car14_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car14.Click
+    Private Sub Car14_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5525,7 +7427,7 @@ Public Class Form1
     End Sub
 
 
-    Private Sub Car16_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car16.Click
+    Private Sub Car16_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5537,7 +7439,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car17_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car17.Click
+    Private Sub Car17_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5549,7 +7451,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car18_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car18.Click
+    Private Sub Car18_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5561,7 +7463,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car19_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car19.Click
+    Private Sub Car19_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5573,7 +7475,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car20_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car20.Click
+    Private Sub Car20_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5585,7 +7487,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car21_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car21.Click
+    Private Sub Car21_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5597,7 +7499,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car22_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car22.Click
+    Private Sub Car22_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5609,7 +7511,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car23_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car23.Click
+    Private Sub Car23_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5621,7 +7523,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car24_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car24.Click
+    Private Sub Car24_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5633,7 +7535,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car25_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car25.Click
+    Private Sub Car25_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5645,7 +7547,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car26_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car26.Click
+    Private Sub Car26_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5657,7 +7559,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car27_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car27.Click
+    Private Sub Car27_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5669,7 +7571,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car28_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car28.Click
+    Private Sub Car28_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5681,7 +7583,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car29_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car29.Click
+    Private Sub Car29_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5693,7 +7595,7 @@ Public Class Form1
         End Try
     End Sub
 
-    Private Sub Car30_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Car30.Click
+    Private Sub Car30_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
         Dim temp As Integer = view_car_idx
         Try
 
@@ -5708,20 +7610,21 @@ Public Class Form1
 
 
     Private Sub Button19_Click_3(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button19.Click
-        Dim watch As Stopwatch = Stopwatch.StartNew()
+
         Dim a As String = ""
         If CInt(From_cb.Text) = 0 Then
-            a = Dijkstra_fn.Dijkstra_fn_ary(Dijkstra_list(1).ary, Tag_ID_Fork_List, Car(view_car_idx).get_tagId, To_cb.Text, TextBox3.Text)
+            a = Dijkstra_fn_ary(Dijkstra_list(1).ary, Tag_ID_Fork_List, Car(view_car_idx).get_tagId, To_cb.Text, TextBox3.Text)
         ElseIf Not car_type.Text = "" Then
             For i As Integer = 0 To Dijkstra_list.Length - 1
                 If Dijkstra_list(i).name = car_type.Text Then
-                    a = Dijkstra_fn.Dijkstra_fn_ary(Dijkstra_list(i).ary, Tag_ID_Fork_List, CInt(From_cb.Text), To_cb.Text, TextBox3.Text)
+                    a = Dijkstra_fn_ary(Dijkstra_list(i).ary, Tag_ID_Fork_List, CInt(From_cb.Text), To_cb.Text, TextBox3.Text)
                 End If
             Next
         Else
 
-            a = Dijkstra_fn.Dijkstra_fn_ary(Dijkstra_list(1).ary, Tag_ID_Fork_List, CInt(From_cb.Text), To_cb.Text, TextBox3.Text)
+            a = Dijkstra_fn_ary(Dijkstra_list(1).ary, Tag_ID_Fork_List, CInt(From_cb.Text), To_cb.Text, TextBox3.Text)
         End If
+        MsgBox(a)
         Dim path_ary() As String
         path_ary = a.Split(",")
         Dim sensor_offset As Integer = 0
@@ -5731,10 +7634,10 @@ Public Class Form1
         'Dim path_output_list_idx As Integer = 0
         Dim path_ary_Len As Integer = path_ary.Length
         If Not path_ary_Len = 1 Then
-            'Ë∂ÖÈÅéÂÖ©ÂÄãÈªû‰Ωç
+            '∂WπL®‚≠”¬I¶Ï
             For i As Integer = 0 To path_ary_Len - 2
                 Dim flag As Boolean = False
-                'ÁâπÊÆäË∑ØÂæë
+                'ØSÆÌ∏ÙÆ|
                 If i <= (path_ary_Len - 3) Then
                     For j As Integer = 0 To path_S.Length - 1
                         If path_ary(i) = path_S(j).From_Point And path_ary(i + 1) = path_S(j).M_Point And path_ary(i + 2) = path_S(j).To_Point Then
@@ -5744,59 +7647,47 @@ Public Class Form1
                                 path_output += "@" + path_S(j).From_Point.ToString + "," + path_S(j).direction0.ToString + "," + path_S(j).action0 + (CInt(path_S(j).Sensor0) + sensor_offset).ToString + "," + path_S(j).speed0.ToString
                                 path_output += "@" + path_S(j).M_Point.ToString + "," + path_S(j).direction1.ToString + "," + path_S(j).action1 + (CInt(path_S(j).Sensor1) + sensor_offset).ToString + "," + path_S(j).speed1.ToString
                             Else
-                                'Â¶ÇÊûúÊúâM2Â∞±ÂÖ®ÈÉ®Áî®M2Âèñ‰ª£
+                                '¶p™G¶≥M2¥N•˛≥°•ŒM2®˙•N
                                 path_output += path_S(j).M2_Point
                             End If
                             i += 1
                             Exit For
                         End If
                     Next
-
                 End If
 
                 If i <= (path_ary_Len - 2) And flag = False Then
 
-                    Dim key1 As Integer = path_ary(i) * 100000 + CInt(path_ary(i + 1))
-                    Dim key2 As Integer = path_ary(i + 1) * 100000 + CInt(path_ary(i))
-                    If Path_fork_Dictionary.ContainsKey(key1) Then
+                    For j As Integer = 0 To path_fork_base.Length - 1
 
-                        path_output += "@" + path_ary(i).ToString + ",0," + Path_fork_Dictionary(key1).action0 + (CInt(Path_fork_Dictionary(key1).Sensor0) + sensor_offset).ToString + "," + Path_fork_Dictionary(key1).speed0.ToString
-                        last_direction = 0
-
-                    ElseIf Path_fork_Dictionary.ContainsKey(key2) Then
-
-                        path_output += "@" + path_ary(i).ToString + ",1," + Path_fork_Dictionary(key2).action1 + (CInt(Path_fork_Dictionary(key2).Sensor1) + sensor_offset).ToString + "," + Path_fork_Dictionary(key2).speed1.ToString
-                        last_direction = 1
-
-
-                    Else
-                        settext("ÈåØË™§ÔºåÁÑ°Ê≥ïÁΩÆ‰ø°ÁöÑÈåØË™§fork")
-                    End If
+                        If path_fork_base(j).From_Point = path_ary(i) And path_fork_base(j).To_Point = path_ary(i + 1) And Not path_fork_base(j).speed0 = 0 Then
+                            path_output += "@" + path_ary(i).ToString + ",0," + path_fork_base(j).action0 + (CInt(path_fork_base(j).Sensor0) + sensor_offset).ToString + "," + path_fork_base(j).speed0.ToString
+                            last_direction = 0
+                        ElseIf path_fork_base(j).To_Point = path_ary(i) And path_fork_base(j).From_Point = path_ary(i + 1) And Not path_fork_base(j).speed1 = 0 Then
+                            path_output += "@" + path_ary(i).ToString + ",1," + path_fork_base(j).action1 + (CInt(path_fork_base(j).Sensor1) + sensor_offset).ToString + "," + path_fork_base(j).speed1.ToString
+                            last_direction = 1
+                        End If
+                    Next
                 End If
 
 
             Next
-            'Êñ∞Â¢ûÂÅúÊ≠¢TAG
+            '∑sºW∞±§ÓTAG
             If last_direction = 0 Then
                 path_output += "@" + path_ary(path_ary.Length - 1) + ",1,S0,5"
             Else
                 path_output += "@" + path_ary(path_ary.Length - 1) + ",0,S0,5"
             End If
 
-            'Â≠ó‰∏≤ËΩâÊàêÂëΩ‰ª§Èªû‰ΩçÂÇ≥ÂÖ•AGVÔºå‰∏¶ÂïüÂãïAGV
+            '¶r¶Í¬‡¶®©R•O¬I¶Ï∂«§JAGV°A®√±“∞ AGV
 
         End If
 
-        watch.Stop()
-        Dim elapsedMs As Long = watch.ElapsedMilliseconds
-
-        MsgBox(elapsedMs.ToString() & " ms")
-        MsgBox(a)
-        settext(path_output)
         MsgBox(path_output)
+        settext(path_output)
     End Sub
 
-    Private Sub CheckBox1_CheckedChanged_3(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles settext_filter.CheckedChanged
+    Private Sub CheckBox1_CheckedChanged_3(ByVal sender As System.Object, ByVal e As System.EventArgs)
 
     End Sub
 
@@ -5831,10 +7722,6 @@ Public Class Form1
             writer.WriteString(Loading_Check.Checked.ToString)
             writer.WriteEndElement()
 
-            writer.WriteStartElement("chrage_exception")
-            writer.WriteString(chrage_exception.Text)
-            writer.WriteEndElement()
-
             writer.WriteStartElement("MyDB")
             writer.WriteString(MyDB_txt.Text)
             writer.WriteEndElement()
@@ -5855,17 +7742,6 @@ Public Class Form1
             writer.WriteString(password_txt.Text)
             writer.WriteEndElement()
 
-            writer.WriteStartElement("PathLen")
-            PathLen = CInt(PathLenTxt.Text.ToString)
-            writer.WriteString(PathLenTxt.Text.ToString)
-            writer.WriteEndElement()
-
-            writer.WriteStartElement("RemapLen")
-            ReMapLen = CInt(RemapLenTxt.Text.ToString)
-            writer.WriteString(RemapLenTxt.Text.ToString)
-            writer.WriteEndElement()
-
-
             writer.WriteStartElement("DebugMode")
             writer.WriteString(DebugMode.Checked.ToString)
             writer.WriteEndElement()
@@ -5880,15 +7756,67 @@ Public Class Form1
             AgvTimeoutVal = CInt(AgvTimeout.Text)
             writer.WriteEndElement()
 
-            writer.WriteStartElement("RetreatPath")
-            writer.WriteString(RetreatPathTxt.Text)
-            RetreatPath = CInt(RetreatPathTxt.Text)
+            writer.WriteStartElement("Ratio")
+            writer.WriteString(ratio.Text)
+            AGVratio = CDbl(ratio.Text)
             writer.WriteEndElement()
+
+            writer.WriteStartElement("McsPort")
+            writer.WriteString(McsPortTxt.Text)
+            McsPort = CInt(McsPortTxt.Text)
+            writer.WriteEndElement()
+
+            writer.WriteStartElement("SOC")
+            writer.WriteString(SOCTxt.Text)
+            SOC = CInt(SOCTxt.Text)
+            writer.WriteEndElement()
+
+            writer.WriteStartElement("MapX")
+            writer.WriteString(MapX.Text)
+            map_offset_X = CInt(MapX.Text)
+            writer.WriteEndElement()
+
+            writer.WriteStartElement("MapY")
+            writer.WriteString(MapY.Text)
+            map_offset_Y = CInt(MapY.Text)
+            writer.WriteEndElement()
+
+            writer.WriteStartElement("BlockPoint")
+            writer.WriteString(BlockPoint.Text)
+            AllBlockPoint = BlockPoint.Text
+            AllBlockPointList = AllBlockPoint.Split(",")
+            writer.WriteEndElement()
+
+            For i As Integer = 200 To 249
+
+
+
+                If Me.Controls.Find("Err" + i.ToString(), True).Length = 1 Then
+                    Dim chb As CheckBox = Me.Controls.Find("Err" + i.ToString(), True)(0)
+                    'If chb.Length = 1 Then
+                    writer.WriteStartElement("Err" + i.ToString)
+                    writer.WriteString(chb.Checked.ToString)
+                    For j As Integer = 0 To car_no - 1
+                        If chb.Checked = True Then
+                            Car(j).warning(i - 200) = j
+                        Else
+                            Car(j).warning(i - 200) = 0
+                        End If
+                    Next
+                    writer.WriteEndElement()
+                End If
+
+
+                ' End If
+
+            Next
+
+
 
             writer.WriteEndElement()
             writer.WriteEndDocument()
         Catch ex As Exception
-            MsgBox("Â≠òÊ™îÂ§±Êïó")
+            MsgBox("¶s¿…•¢±—" + ex.Message)
         End Try
         writer.Close()
 
@@ -5897,25 +7825,21 @@ Public Class Form1
         Next
     End Sub
 
-    Private Sub ContextMenuStrip1_Opening(ByVal sender As System.Object, ByVal e As System.ComponentModel.CancelEventArgs) Handles ContextMenuStrip1.Opening
-
-    End Sub
+ 
 
     Private Sub Button18_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button18.Click
-        Dim watch As Stopwatch = Stopwatch.StartNew()
-
 
         Dim a As String = ""
         If CInt(From_cb.Text) = 0 Then
-            a = Dijkstra_fn.Dijkstra_fn_ary(Dijkstra_list(0).ary, Tag_ID_List, Car(view_car_idx).get_tagId, To_cb.Text, TextBox3.Text)
+            a = Dijkstra_fn_ary(Dijkstra_list(0).ary, Tag_ID_List, Car(view_car_idx).get_tagId, To_cb.Text, TextBox3.Text + "," + AllBlockPoint)
         ElseIf Not car_type.Text = "" Then
             For i As Integer = 0 To Dijkstra_list.Length - 1
                 If Dijkstra_list(i).name = car_type.Text Then
-                    a = Dijkstra_fn.Dijkstra_fn_ary(Dijkstra_list(i).ary, Tag_ID_List, CInt(From_cb.Text), To_cb.Text, TextBox3.Text)
+                    a = Dijkstra_fn_ary(Dijkstra_list(i).ary, Tag_ID_List, CInt(From_cb.Text), To_cb.Text, TextBox3.Text + "," + AllBlockPoint)
                 End If
             Next
         Else
-            a = Dijkstra_fn.Dijkstra_fn_ary(Dijkstra_list(0).ary, Tag_ID_List, CInt(From_cb.Text), To_cb.Text, TextBox3.Text)
+            a = Dijkstra_fn_ary(Dijkstra_list(0).ary, Tag_ID_List, CInt(From_cb.Text), To_cb.Text, TextBox3.Text + "," + AllBlockPoint)
         End If
 
         Dim path_ary() As String
@@ -5926,12 +7850,12 @@ Public Class Form1
         Dim path_ary_Len As Integer = path_ary.Length
         'Dim path_output_list(50) As Integer
         'Dim path_output_list_idx As Integer = 0
-
+        MsgBox(a)
         If Not path_ary_Len = 1 Then
-            'Ë∂ÖÈÅéÂÖ©ÂÄãÈªû‰Ωç
+            '∂WπL®‚≠”¬I¶Ï
             For i As Integer = 0 To path_ary_Len - 2
                 Dim flag As Boolean = False
-                'ÁâπÊÆäË∑ØÂæë
+                'ØSÆÌ∏ÙÆ|
                 If i <= (path_ary_Len - 3) Then
                     For j As Integer = 0 To path_S.Length - 1
                         If path_ary(i) = path_S(j).From_Point And path_ary(i + 1) = path_S(j).M_Point And path_ary(i + 2) = path_S(j).To_Point Then
@@ -5941,7 +7865,7 @@ Public Class Form1
                                 path_output += "@" + path_S(j).From_Point.ToString + "," + path_S(j).direction0.ToString + "," + path_S(j).action0 + (CInt(path_S(j).Sensor0) + sensor_offset).ToString + "," + path_S(j).speed0.ToString
                                 path_output += "@" + path_S(j).M_Point.ToString + "," + path_S(j).direction1.ToString + "," + path_S(j).action1 + (CInt(path_S(j).Sensor1) + sensor_offset).ToString + "," + path_S(j).speed1.ToString
                             Else
-                                'Â¶ÇÊûúÊúâM2Â∞±ÂÖ®ÈÉ®Áî®M2Âèñ‰ª£
+                                '¶p™G¶≥M2¥N•˛≥°•ŒM2®˙•N
                                 path_output += path_S(j).M2_Point
                             End If
                             i += 1
@@ -5949,64 +7873,37 @@ Public Class Form1
 
                         End If
                     Next
-
                 End If
-                'Ê≠£Â∏∏
+                '•ø±`
                 If i <= (path_ary_Len - 2) And flag = False Then
-                    'For j As Integer = 0 To path_base.Length - 1
-                    '    If path_base(j).From_Point = path_ary(i) And path_base(j).To_Point = path_ary(i + 1) And Not path_base(j).speed0 = 0 Then
-                    '        path_output += "@" + path_ary(i).ToString + ",0," + path_base(j).action0 + (CInt(path_base(j).Sensor0) + sensor_offset).ToString + "," + path_base(j).speed0.ToString
-                    '        last_direction = 0
-                    '    ElseIf path_base(j).To_Point = path_ary(i) And path_base(j).From_Point = path_ary(i + 1) And Not path_base(j).speed1 = 0 Then
-                    '        path_output += "@" + path_ary(i).ToString + ",1," + path_base(j).action1 + (CInt(path_base(j).Sensor1) + sensor_offset).ToString + "," + path_base(j).speed1.ToString
-                    '        last_direction = 1
-                    '    End If
-                    'Next
-                    ' -------------
-                    ' ÊâæÂá∫
-                    Dim key1 As Integer = path_ary(i) * 100000 + CInt(path_ary(i + 1))
-                    Dim key2 As Integer = path_ary(i + 1) * 100000 + CInt(path_ary(i))
-                    If Path_base_Dictionary.ContainsKey(path_ary(i) * 100000 + path_ary(i + 1)) Then
-
-                        path_output += "@" + path_ary(i).ToString + ",0," + Path_base_Dictionary(key1).action0 + (CInt(Path_base_Dictionary(key1).Sensor0) + sensor_offset).ToString + "," + Path_base_Dictionary(key1).speed0.ToString
-                        last_direction = 0
-
-                    ElseIf Path_base_Dictionary.ContainsKey(path_ary(i + 1) * 100000 + path_ary(i)) Then
-
-                        path_output += "@" + path_ary(i).ToString + ",1," + Path_base_Dictionary(key2).action1 + (CInt(Path_base_Dictionary(key2).Sensor1) + sensor_offset).ToString + "," + Path_base_Dictionary(key2).speed1.ToString
-                        last_direction = 1
-
-
-                    Else
-                        settext("ÈåØË™§ÔºåÁÑ°Ê≥ïÁΩÆ‰ø°ÁöÑÈåØË™§")
-                    End If
-                    ' --------------
+                    For j As Integer = 0 To path_base.Length - 1
+                        If path_base(j).From_Point = path_ary(i) And path_base(j).To_Point = path_ary(i + 1) And Not path_base(j).speed0 = 0 Then
+                            path_output += "@" + path_ary(i).ToString + ",0," + path_base(j).action0 + (CInt(path_base(j).Sensor0) + sensor_offset).ToString + "," + path_base(j).speed0.ToString
+                            last_direction = 0
+                        ElseIf path_base(j).To_Point = path_ary(i) And path_base(j).From_Point = path_ary(i + 1) And Not path_base(j).speed1 = 0 Then
+                            path_output += "@" + path_ary(i).ToString + ",1," + path_base(j).action1 + (CInt(path_base(j).Sensor1) + sensor_offset).ToString + "," + path_base(j).speed1.ToString
+                            last_direction = 1
+                        End If
+                    Next
                 End If
 
             Next
-            'Êñ∞Â¢ûÂÅúÊ≠¢TAG
+            '∑sºW∞±§ÓTAG
             If last_direction = 0 Then
                 path_output += "@" + path_ary(path_ary.Length - 1) + ",1,S0,5"
             Else
                 path_output += "@" + path_ary(path_ary.Length - 1) + ",0,S0,5"
             End If
 
-            'Â≠ó‰∏≤ËΩâÊàêÂëΩ‰ª§Èªû‰ΩçÂÇ≥ÂÖ•AGVÔºå‰∏¶ÂïüÂãïAGV
+            '¶r¶Í¬‡¶®©R•O¬I¶Ï∂«§JAGV°A®√±“∞ AGV
 
         End If
 
-
-        watch.Stop()
-        Dim elapsedMs As Long = watch.ElapsedMilliseconds
-
-        MsgBox(elapsedMs.ToString() & " ms")
-        MsgBox(a)
-        settext(path_output)
         MsgBox(path_output)
     End Sub
 
-  
-   
+
+
     Private Sub Button18_Click_1(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button18.Click
 
     End Sub
@@ -6015,100 +7912,1003 @@ Public Class Form1
         LFT_List(CInt(LFT_idx.Text)).reconnect()
 
     End Sub
+    Private Sub ShowSECSIIMessage(ByVal myRawData() As Byte)
+        ' Dim myStack(10) As Integer
+        ' Dim myStackPtr As Integer
+        Dim lOffset As Integer
+        Dim lItemNum As Integer
+        Dim ItemData As Object = New Object
+        Dim lLength As Integer
+        Dim lItemType As Integer
+        Dim DisplayString As String
+        Dim i As Integer
+        Dim cnt As Integer = 0
+        ' Verify whether the input data is an array or not
+        If IsArray(myRawData) = False Or UBound(myRawData) = 0 Then
+            Exit Sub
+        End If
+        Dim showmessage As String = ""
+        lLength = UBound(myRawData) + 1
+        'myStackPtr = 0
+        lOffset = 0
 
-    Private Sub Err_lb_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Err_lb.Click
-        'MsgBox("explorer HTTP://" + IP.Text + "/alarm/index.php")
-        Shell("explorer ""HTTP://" + IP.Text + "/alarm/index.php?alm=" + Err_lb.Text + """ ")
+        While lOffset < lLength And cnt < 1000
 
+            cnt += 1
+            lItemType = comQSWrapper.GetDataItemType(myRawData, lOffset)
+
+            If lItemType = SECSComm.LIST_TYPE Then
+                lItemNum = 99
+                lOffset = comQSWrapper.DataItemIn(myRawData, lOffset, SECSComm.LIST_TYPE, lItemNum, Nothing)
+                ' Display the data item
+
+                showmessage += "<L[" & lItemNum & "]"
+                ' Increase the indent level
+                ' myStack(myStackPtr) = lItemNum
+                ' myStackPtr = myStackPtr + 1
+            ElseIf lItemType = SECSComm.ASCII_TYPE Then
+                lOffset = comQSWrapper.DataItemIn(myRawData, lOffset, SECSComm.ASCII_TYPE, lItemNum, ItemData)
+
+                showmessage += "<A[" & lItemNum & "] " & Chr(34) & ItemData & Chr(34) & ">"
+            ElseIf lItemType = SECSComm.JIS_TYPE Then
+                lOffset = comQSWrapper.DataItemIn(myRawData, lOffset, SECSComm.JIS_TYPE, lItemNum, ItemData)
+
+                showmessage += "<J[" & lItemNum & "] " & Chr(34) & ItemData & Chr(34) & ">"
+            ElseIf lItemType = SECSComm.BINARY_TYPE Then
+                lOffset = comQSWrapper.DataItemIn(myRawData, lOffset, SECSComm.BINARY_TYPE, lItemNum, ItemData)
+
+                DisplayString = ""
+                For i = 0 To lItemNum - 1
+                    DisplayString = DisplayString & " 0x" & Hex(ItemData(i))
+                Next
+                showmessage += ("<B[" & lItemNum & "]" & DisplayString & ">")
+            ElseIf lItemType = SECSComm.BOOLEAN_TYPE Then
+                lOffset = comQSWrapper.DataItemIn(myRawData, lOffset, SECSComm.BOOLEAN_TYPE, lItemNum, ItemData)
+
+                DisplayString = ""
+                For i = 0 To lItemNum - 1
+                    DisplayString = DisplayString & " 0x" & Hex(ItemData(i))
+                Next
+                showmessage += ("<Boolean[" & lItemNum & "]" & DisplayString & ">")
+            ElseIf lItemType = SECSComm.UINT_1_TYPE Then
+                lOffset = comQSWrapper.DataItemIn(myRawData, lOffset, SECSComm.UINT_1_TYPE, lItemNum, ItemData)
+
+                DisplayString = ""
+                For i = 0 To lItemNum - 1
+                    DisplayString = DisplayString & " " & ItemData(i)
+                Next
+                showmessage += ("<U1[" & lItemNum & "]" & DisplayString & ">")
+            ElseIf lItemType = SECSComm.UINT_2_TYPE Then
+                lOffset = comQSWrapper.DataItemIn(myRawData, lOffset, SECSComm.UINT_2_TYPE, lItemNum, ItemData)
+
+                DisplayString = ""
+                For i = 0 To lItemNum - 1
+                    DisplayString = DisplayString & " " & ItemData(i)
+                Next
+                showmessage += ("<U2[" & lItemNum & "]" & DisplayString & ">")
+            ElseIf lItemType = SECSComm.UINT_4_TYPE Then
+                lOffset = comQSWrapper.DataItemIn(myRawData, lOffset, SECSComm.UINT_4_TYPE, lItemNum, ItemData)
+
+                DisplayString = ""
+                For i = 0 To lItemNum - 1
+                    DisplayString = DisplayString & " " & ItemData(i)
+                Next
+                showmessage += ("<U4[" & lItemNum & "]" & DisplayString & ">")
+            ElseIf lItemType = SECSComm.INT_1_TYPE Then
+                lOffset = comQSWrapper.DataItemIn(myRawData, lOffset, SECSComm.INT_1_TYPE, lItemNum, ItemData)
+
+                DisplayString = ""
+                For i = 0 To lItemNum - 1
+                    DisplayString = DisplayString & " " & ItemData(i)
+                Next
+                showmessage += ("<I1[" & lItemNum & "]" & DisplayString & ">")
+            ElseIf lItemType = SECSComm.INT_2_TYPE Then
+                lOffset = comQSWrapper.DataItemIn(myRawData, lOffset, SECSComm.INT_2_TYPE, lItemNum, ItemData)
+
+                DisplayString = ""
+                For i = 0 To lItemNum - 1
+                    DisplayString = DisplayString & " " & ItemData(i)
+                Next
+                showmessage += ("<I2[" & lItemNum & "]" & DisplayString & ">")
+            ElseIf lItemType = SECSComm.INT_4_TYPE Then
+                lOffset = comQSWrapper.DataItemIn(myRawData, lOffset, SECSComm.INT_4_TYPE, lItemNum, ItemData)
+
+                DisplayString = ""
+                For i = 0 To lItemNum - 1
+                    DisplayString = DisplayString & " " & ItemData(i)
+                Next
+                showmessage += ("<I4[" & lItemNum & "]" & DisplayString & ">")
+            ElseIf lItemType = SECSComm.FT_4_TYPE Then
+                lOffset = comQSWrapper.DataItemIn(myRawData, lOffset, SECSComm.FT_4_TYPE, lItemNum, ItemData)
+
+                DisplayString = ""
+                For i = 0 To lItemNum - 1
+                    DisplayString = DisplayString & " " & ItemData(i)
+                Next
+                showmessage += ("<F4[" & lItemNum & "]" & DisplayString & ">")
+            ElseIf lItemType = SECSComm.FT_8_TYPE Then
+                lOffset = comQSWrapper.DataItemIn(myRawData, lOffset, SECSComm.FT_8_TYPE, lItemNum, ItemData)
+                DisplayString = ""
+                For i = 0 To lItemNum - 1
+                    DisplayString = DisplayString & " " & ItemData(i)
+                Next
+                showmessage += ("<F8[" & lItemNum & "]" & DisplayString & ">")
+            Else
+            End If
+        End While
+        setCommtext(showmessage)
+    End Sub
+
+
+    Private Sub Button24_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
+        comQGWrapper.UpdateSV(GEM_SC_STATE, GEM.SC_INIT)
+    End Sub
+
+    Private Sub Button25_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
 
     End Sub
-    Dim ChargerClient(10) As EQP_Modus
-    Private Sub EQ_BG_DoWork(ByVal sender As System.Object, ByVal e As System.ComponentModel.DoWorkEventArgs) Handles EQ_BG.DoWork
+
+    Private Sub Button27_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button27.Click
+        comQGWrapper.UpdateSV(GEM_SC_STATE, GEM.SC_AUTO)
+        For i As Integer = 0 To car_no - 1
+            Car(i).online = True
+        Next
+        Button7.Text = "ONLINE"
+    End Sub
+
+    Private Sub btn_OnLineRemote_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles btn_OnLineRemote.Click
+        comQGWrapper.UpdateSV(GEM_CONTROL_STATE, GEM.OnlineRemoteval)
+        ' start_flag = True
+    End Sub
+    Dim PAUSING_CNT As Integer = 0
+    Dim hartbit As Integer = 0
+    Dim pause_cnt As Integer = 0
+    Dim pre_cnt As Integer = 0
+    Dim loader_flag As Integer = 0
+    Private Sub MCS_Tick(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles MCS.Tick
+        Dim lSVID As Integer
+        Dim GetFormat As Integer
+        Dim Value As Object = New Object
         Dim oConn As MySqlConnection
+        Dim idx As Integer = -1
         Dim sqlCommand As New MySqlCommand
-        Dim Query As String = ""
         oConn = New MySqlConnection(Mysql_str)
+        Dim Query As String = ""
         oConn.Open()
         sqlCommand.Connection = oConn
-        For i As Integer = 0 To ChargerClient.Length - 1
-            Try
-
+        'If a.flag = False Then
+        '    a.init("192.168.8.70", 502, 1100)
+        'End If
+        lSVID = GEM_CONTROL_STATE
+        comQGWrapper.GetSV(lSVID, GetFormat, Value)
+        Me.agv_info.Invalidate()
+        Dim cmd_send_flag As Boolean = False
+        'g_iGemControlState = Value
+        Dim car_zone As Boolean = False
         
-            If My.Computer.Network.Ping(ChargerClient(i).ipadress) Then
-                'Dim readflag As Boolean = False
-                'setCommtext("Ping->" + ChargerClient(i).EQ_ID + ":" + ChargerClient(i).ipadress)
-                ChargerClient(i).ReadOK = ChargerClient(i).Read_HoldingReg(ChargerClient(i).HoldingReg, 60, ChargerClient(i).HoldingResponse)
-                Dim Status As String = "Auto"
-                Dim AutoStatus As Integer = 1
-                If ChargerClient(i).HoldingResponse(19) > 0 Then
-                    If Not ChargerClient(i).HoldingResponse(19) = ChargerClient(i).Pre_State Then
-                        Query = "INSERT ignore INTO  `alarm` (`cmd_idx`, `HAPPEN_DATE`, `CLEAR_DATE`, `ALM_ID`, `ALM_DEVICE`, `ALM_TYPE`, `ALM_MSG`, `SUB_LOC`, `ALARM_SPACE`, `CST_ID`) "
-                        Query += "VALUES ('',now(),now(), '" + (3000 + ChargerClient(i).HoldingResponse(19)).ToString + "', '" + ChargerClient(i).tag_id.ToString + "', '', '', '" + ChargerClient(i).tag_id.ToString + "', '', '') ;"
-                        sqlCommand.CommandText = Query
-                        sqlCommand.ExecuteNonQuery()
-                        ChargerClient(i).Pre_State = ChargerClient(i).HoldingResponse(19)
-                    End If
-                    Status = "DOWN"
-                    AutoStatus = -1
-                ElseIf ChargerClient(i).HoldingResponse(18) = 0 Then
-                    Status = "Manual"
-                    AutoStatus = 0
-                ElseIf ((ChargerClient(i).HoldingResponse(23) << 16) + ChargerClient(i).HoldingResponse(22)) > 0 Then
-                    Status = "RUN"
-                    AutoStatus = 2
-                    'ÂÖÖÈõª‰∏≠
-                ElseIf ChargerClient(i).HoldingResponse(18) = 1 Then
-                    Status = "IDLE"
-                    AutoStatus = 1
+
+        ' Dim car_cnt As Integer = 0
+        'For i As Integer = 2 To car_no - 1
+        '    Car(i).Site = "TP"
+        '    If Car(i).status >= 0 And Car(i).Lock_user = "" And Not Car(i).device_status(6) = 48 Then
+        '        car_cnt += 1
+        '        If car_zone = False Then
+        '            Car(i).Site = "TP,TC"
+        '            car_zone = True
+
+        '        End If
+        '        '5•x®Æ•x•_®Æ
+        '        If car_cnt = 5 Then
+        '            Car(i).Site = "TP,TC"
+        '        End If
+        '    End If
+        'Next
+        'If car_cnt = 1 Then
+        '    For i As Integer = 2 To car_no - 1
+        '        Car(i).Site = "TP,TC"
+        '    Next
+        'End If
+
+
+        '™¨∫A≈„•‹
+        Select Case Value
+            Case 1
+                Me.lbl_CcontrolStats.BackColor = Color.Red
+                Me.btn_OnLineRemote.Enabled = False
+                Me.btn_OnlineLocal.Enabled = False
+
+                Me.lbl_CcontrolStats.Text = "1:OffLine (EQP OffLine)"
+                Me.btn_OnLine.Enabled = True
+                Me.btn_Offline.Enabled = False
+            Case 2
+                Me.lbl_CcontrolStats.BackColor = Color.Red
+                Me.btn_OnLineRemote.Enabled = False
+                Me.btn_OnlineLocal.Enabled = False
+
+                Me.lbl_CcontrolStats.Text = "2:OffLine (Attempt OnLine)"
+                Me.btn_OnLine.Enabled = False
+                Me.btn_Offline.Enabled = False
+            Case 3
+                Me.lbl_CcontrolStats.BackColor = Color.Red
+                Me.btn_OnLineRemote.Enabled = False
+                Me.btn_OnlineLocal.Enabled = False
+
+                Me.lbl_CcontrolStats.Text = "3:OffLine (Host OffLine)"
+                Me.btn_OnLine.Enabled = False
+                Me.btn_Offline.Enabled = True
+            Case 4
+                Me.lbl_CcontrolStats.Text = "4:OnLine Local"
+                Me.lbl_CcontrolStats.BackColor = Color.Yellow
+                Me.btn_OnLine.Enabled = False
+                Me.btn_Offline.Enabled = True
+                Me.btn_OnLineRemote.Enabled = True
+                Me.btn_OnlineLocal.Enabled = False
+            Case 5
+                Me.lbl_CcontrolStats.Text = "5:OnLine Remote"
+                Me.lbl_CcontrolStats.BackColor = Color.GreenYellow
+                Me.btn_OnLine.Enabled = False
+                Me.btn_Offline.Enabled = True
+                Me.btn_OnLineRemote.Enabled = False
+                Me.btn_OnlineLocal.Enabled = True
+                If pause_cnt > 20 Then
+                    pause_cnt = 0
+                    comQGWrapper.UpdateSV(GEM_SC_STATE, GEM.SC_AUTO)
+                    For i As Integer = 0 To car_no - 1
+                        Car(i).online = True
+                    Next
+                    Button7.Text = "ONLINE"
                 End If
-                Dim Amp As Integer = 0
-                Dim Volt As Integer = 0
-                For j As Integer = 0 To Car.Length - 1
-                    If Car(j).get_tagId = ChargerClient(i).tag_id And Car(j).device_status(6) = 48 Then
-                        Amp = Car(j).get_AMP
-                        Volt = Car(j).get_BMSVolt
+        End Select
+        Dim SC_State As Integer
+        'PAUSE §¡¥´
+        comQGWrapper.GetSV(GEM_SC_STATE, 1, SC_State)
+        If SC_State = GEM.SC_PAUSING Then
+            'µ•´›©“¶≥©R•Oµ≤ßÙ
+            '§£±µ®¸∑s™∫©R•O
+
+            PAUSING_CNT += 1
+            If PAUSING_CNT > 5 Then
+                SC_State = GEM.SC_PAUSED
+                PAUSING_CNT = 100
+                comQGWrapper.UpdateSV(GEM_SC_STATE, GEM.SC_PAUSED)
+            End If
+        End If
+
+        If SC_State = GEM.SC_AUTO Then
+            lbl_SC_Stats.Text = "AUTO"
+            pause_cnt = 0
+        ElseIf SC_State = GEM.SC_PAUSING Then
+            lbl_SC_Stats.Text = "AUTO->PAUSE"
+        ElseIf SC_State = GEM.SC_PAUSED Then
+            lbl_SC_Stats.Text = "PAUSED"
+            pause_cnt += 1
+        End If
+
+        If ConnectionState = 1 Then
+            ConnectionState = 1
+            Me.lbl_SECSConnectState.Text = "Connection"
+            Me.lbl_SECSConnectState.BackColor = Color.GreenYellow
+        Else
+            'Ver:4.10
+            lbl_SECSConnectState.Text = "Disconnection(Stop)"
+            lbl_SECSConnectState.BackColor = Color.Red
+        End If
+
+        hartbit += 1
+        If hartbit = 15 And ConnectionState = 1 Then
+            comQSWrapper.TestLink()
+        End If
+        'If hartbit > 25 And ConnectionState = 1 Then
+        '    Dim a As UInteger = 0
+        '    hartbit = 0
+        '    comQSWrapper.SendSECSIIMessage(1, 1, 1, a, Nothing, )
+        '    setCommtext("system:" + a.ToString + "∞e•XS1F1")
+
+        'End If
+        'event 
+        Dim CONTROL_STATE As UInt16 = 0
+        comQGWrapper.GetSV(GEM_CONTROL_STATE, SECSComm.UINT_2_TYPE, CONTROL_STATE)
+        If Not CONTROL_STATE = Pre_ControlState And ConnectionState = 1 Then
+            Pre_ControlState = CONTROL_STATE
+            If CONTROL_STATE = 1 Then
+                'eq offline
+                comQGWrapper.EventReportSend(1)
+            ElseIf CONTROL_STATE = 2 Then
+                'eq Attempt offline
+            ElseIf CONTROL_STATE = 3 Then
+                'host offline
+            ElseIf CONTROL_STATE = 4 Then
+                'online local
+                comQGWrapper.EventReportSend(2)
+            ElseIf CONTROL_STATE = 5 Then
+                'online remote
+                comQGWrapper.EventReportSend(3)
+            End If
+        Else
+            Pre_ControlState = CONTROL_STATE
+        End If
+        Dim SCSTATE As UInt16 = 0
+        comQGWrapper.GetSV(GEM_SC_STATE, SECSComm.UINT_2_TYPE, SCSTATE)
+        If Not SCSTATE = Pre_SCState And ConnectionState = 1 Then
+            Pre_SCState = SCSTATE
+            If SCSTATE = 0 Then
+                'None
+                'comQGWrapper.EventReportSend(1)
+            ElseIf SCSTATE = 1 Then
+                'INT
+                comQGWrapper.EventReportSend(54)
+            ElseIf SCSTATE = 2 Then
+                'PAUSED
+                comQGWrapper.EventReportSend(55)
+            ElseIf SCSTATE = 3 Then
+                'PAUSING->AUTO
+                comQGWrapper.EventReportSend(53)
+            ElseIf SCSTATE = 4 Then
+                ''AUTO->PAUSEING
+                comQGWrapper.EventReportSend(57)
+                comQGWrapper.EventReportSendOb(160, comQGWrapper.Zone(0).ZoneName + "," + comQGWrapper.Zone(0).ZoneCapacity.ToString + "," + comQGWrapper.Zone(0).ZoneSize.ToString + "," + comQGWrapper.Zone(0).ZoneType.ToString)
+                comQGWrapper.EventReportSendOb(160, comQGWrapper.Zone(1).ZoneName + "," + comQGWrapper.Zone(1).ZoneCapacity.ToString + "," + comQGWrapper.Zone(1).ZoneSize.ToString + "," + comQGWrapper.Zone(1).ZoneType.ToString)
+            End If
+        Else
+            Pre_SCState = SCSTATE
+        End If
+
+        If Me.EQ_BG.IsBusy = False Then
+            If ConnectionState = 1 And start_flag Or 1 Then
+                EQ_BG.RunWorkerAsync()
+            End If
+        End If
+        If ChargerClient(0).HoldingResponse(16) = 1 Then
+            Del_CMD(1)
+            '•h•RπqØ∏    
+            Send_CMD(Car(0).device_no, 1, 8197, "Loader", 50)
+            Send_CMD(Car(0).device_no, 1, 8195, "Loader", 51)
+            loader_flag = 1
+        ElseIf ChargerClient(0).HoldingResponse(16) = 2 Then
+            '•h´›©R¬I
+            loader_flag = 0
+            Del_CMD(1)
+            Update_SQL("delete from agv_cmd_list where `AGVNo`=1 ")
+            Send_CMD(Car(0).device_no, 4, 4101, "Loader", 60)
+
+        End If
+
+        If loader_flag = 1 Then
+            'Loop
+
+            Send_CMD(Car(0).device_no, 1, 8197, "Loader", 50)
+            Send_CMD(Car(0).device_no, 1, 8195, "Loader", 51)
+        End If
+
+
+
+
+        Dim cnt1 As Integer = 0
+
+        For ii As Integer = 0 To Car.Length - 1
+            If Car(ii).status = 0 And Car(ii).flag = True And Car(ii).Lock_user = "" Then
+
+
+                For i As Integer = 0 To ListView1.Items.Count - 1
+                    If ListView1.Items(i).SubItems(1).Text = Car(ii).device_no.ToString Then
+                        cnt1 += 1
                     End If
                 Next
-                Try
-                    Dim step_time As String = ChargerClient(i).HoldingResponse(34).ToString + ChargerClient(i).HoldingResponse(35).ToString + ChargerClient(i).HoldingResponse(36).ToString
-                    Dim totaltime As String = ChargerClient(i).HoldingResponse(37).ToString + ChargerClient(i).HoldingResponse(38).ToString + ChargerClient(i).HoldingResponse(39).ToString
-                    Query = "INSERT ignore INTO `agv`.`charger_history` (`tagid`, `X`, `Y`, `T1`, `ForkLocation`,LineT, `AutoStatus`, `Err`, `OUT_V`, `OUT_A`, `OUT_Watt`,OUT_T, " + _
-                            "`OUT_mAh`, `OUT_Wh`, `steptime`, `totaltime`, `STEPIndex`, `IN_V`, `IN_A`, `IN_Watt`, `IN_kWh`, `IN_totaltime`,OUT_T2) " + _
-                            "VALUES ('" + ChargerClient(i).tag_id.ToString + "', '" + ChargerClient(i).HoldingResponse(1).ToString + "', '" + ChargerClient(i).HoldingResponse(2).ToString + "', '" + ChargerClient(i).HoldingResponse(3).ToString + "'," + _
-                            " '" + ChargerClient(i).HoldingResponse(7).ToString + "', '" + ChargerClient(i).HoldingResponse(8).ToString + "', '" + AutoStatus.ToString + "', '" + ChargerClient(i).HoldingResponse(19).ToString + "', '" + ((ChargerClient(i).HoldingResponse(21) << 16) + ChargerClient(i).HoldingResponse(20)).ToString + "'," + _
-                            " '" + ((ChargerClient(i).HoldingResponse(23) << 16) + ChargerClient(i).HoldingResponse(22)).ToString + "', '" + ((ChargerClient(i).HoldingResponse(25) << 16) + ChargerClient(i).HoldingResponse(24)).ToString + "', '" + ((ChargerClient(i).HoldingResponse(27) << 16) + ChargerClient(i).HoldingResponse(26)).ToString + "', '" + ((ChargerClient(i).HoldingResponse(29) << 16) + ChargerClient(i).HoldingResponse(28)).ToString + "', " + _
-                            " '" + ((ChargerClient(i).HoldingResponse(31) << 16) + ChargerClient(i).HoldingResponse(30)).ToString + "', '" + step_time + "', " + _
-                            " '" + totaltime + "', '" + ChargerClient(i).HoldingResponse(40).ToString + "', '" + ChargerClient(i).HoldingResponse(50).ToString + "' " + _
-                            ", '" + ChargerClient(i).HoldingResponse(52).ToString + "', '" + ChargerClient(i).HoldingResponse(24).ToString + "', '" + ChargerClient(i).HoldingResponse(56).ToString + "', '" + ChargerClient(i).HoldingResponse(58).ToString + "', '" + ChargerClient(i).HoldingResponse(9).ToString + "');"
-                    sqlCommand.CommandText = Query
-                    sqlCommand.ExecuteNonQuery()
-                    Query = "update  `charger`  set Status ='" + Status + "',err=" + ChargerClient(i).HoldingResponse(19).ToString + ",Amp=" + Amp.ToString + ",Volt=" + Volt.ToString + " where PORT_ID='" + ChargerClient(i).EQ_ID + "'"
-                    sqlCommand.CommandText = Query
-                    sqlCommand.ExecuteNonQuery()
-                    Query = "update  `charger_status`  set X ='" + ChargerClient(i).HoldingResponse(1).ToString + "',Y=" + ChargerClient(i).HoldingResponse(2).ToString + ",T1=" + ChargerClient(i).HoldingResponse(3).ToString + ",ForkLocation=" + ChargerClient(i).HoldingResponse(7).ToString + ",LineT=" + ChargerClient(i).HoldingResponse(8).ToString + _
-                        ",AutoStatus ='" + AutoStatus.ToString + "',Err=" + ChargerClient(i).HoldingResponse(19).ToString + ",OUT_V=" + ((ChargerClient(i).HoldingResponse(21) << 16) + ChargerClient(i).HoldingResponse(20)).ToString + ",OUT_A=" + ((ChargerClient(i).HoldingResponse(23) << 16) + ChargerClient(i).HoldingResponse(22)).ToString + _
-                        ",OUT_Watt ='" + ((ChargerClient(i).HoldingResponse(25) << 16) + ChargerClient(i).HoldingResponse(24)).ToString + "',OUT_T=" + ((ChargerClient(i).HoldingResponse(27) << 16) + ChargerClient(i).HoldingResponse(26)).ToString + ",OUT_mAh=" + ((ChargerClient(i).HoldingResponse(29) << 16) + ChargerClient(i).HoldingResponse(28)).ToString + ",OUT_Wh=" + ((ChargerClient(i).HoldingResponse(31) << 16) + ChargerClient(i).HoldingResponse(30)).ToString + _
-                        ",steptime ='" + step_time + "',totaltime=" + totaltime + ",STEPIndex=" + ChargerClient(i).HoldingResponse(40).ToString + ",IN_V=" + ChargerClient(i).HoldingResponse(50).ToString + _
-                         ",IN_A ='" + ChargerClient(i).HoldingResponse(52).ToString + "',IN_Watt=" + ChargerClient(i).HoldingResponse(54).ToString + ",IN_kWh=" + ChargerClient(i).HoldingResponse(56).ToString + ",IN_totaltime=" + ChargerClient(i).HoldingResponse(58).ToString + _
-                          ",cur_time =now(),OUT_T2 ='" + ChargerClient(i).HoldingResponse(9).ToString + "'" + _
-                        " where tagid=" + ChargerClient(i).tag_id.ToString
-                    sqlCommand.CommandText = Query
-                    sqlCommand.ExecuteNonQuery()
-                Catch ex As Exception
-                        settext("EQ_BG " + Query)
-                End Try
-            Else
-                ChargerClient(i).ReadOK = False
+
+                If cnt1 = 0 Then
+                    If Car(ii).get_loading = 3 Then
+                        Dim tagid1 As Integer = Search_EMPTY_Shelf(Car(ii).get_tagId, "", AllBlockPoint + "," + Car(ii).Block_Point)
+                        Send_CMD_CST(Car(ii).device_no, 2, tagid1, Car(ii).get_cstid, Now.Ticks.ToString, 49, "AutoOut")
+                        settext("send 2 to shelf ")
+                    End If
                 End If
+            End If
+        Next
+
+        '-------------------------
+        Dim cmdlist(500) As CmdPwt
+        Dim CmdPwtLen As Integer = 0
+        For i As Integer = 0 To Car.Length - 1
+            For j As Integer = 0 To comQGWrapper.CST.Length - 1
+                If Car(i).flag And (Car(i).cmd_idx = -2 Or Car(i).device_status(6) = 48) And (Car(i).status = 0 Or Car(i).status = 2 Or Car(i).status = 5) And Car(i).get_loading = 0 And Car(i).Lock_user = "" And Car(i).get_SOC > Car(i).Recharge_SOC Then
+                    If Not comQGWrapper.CST(j).DEST = "" And Not comQGWrapper.CST(j).CarrierID = "" Then
+                        cmdlist(CmdPwtLen).CarIdx = i
+                        cmdlist(CmdPwtLen).CstIdx = j
+                        cmdlist(CmdPwtLen).distance = -1 * TagID_Dis(Car(i).get_tagId, comQGWrapper.CST(j).CarrierLoc)
+                        If comQGWrapper.CST(j).CarrierLoc Is Nothing Then
+
+                            cmdlist(CmdPwtLen).EQPwt = 0
+                        Else
+
+                            If comQGWrapper.CST(j).CarrierLoc.StartsWith("CGL") Then
+                                cmdlist(CmdPwtLen).EQPwt = 100000
+                            Else
+                                cmdlist(CmdPwtLen).EQPwt = 0
+                            End If
+                        End If
+                        cmdlist(CmdPwtLen).Pwt = comQGWrapper.CST(j).PRIORITY
+                        cmdlist(CmdPwtLen).mcstime = CLng(Now.ToString("yyyyMMddHHmmss")) - comQGWrapper.CST(j).mcstime
+                        cmdlist(CmdPwtLen).total = cmdlist(CmdPwtLen).distance + cmdlist(CmdPwtLen).EQPwt + cmdlist(CmdPwtLen).Pwt + cmdlist(CmdPwtLen).mcstime
+                        CmdPwtLen += 1
+                    End If
+                End If
+
+            Next
+        Next
+        Array.Resize(cmdlist, CmdPwtLen)
+
+        For i As Integer = 0 To CmdPwtLen - 1
+
+            For j As Integer = i To CmdPwtLen - 1
+                If cmdlist(i).total < cmdlist(j).total Then
+                    Dim temp As CmdPwt = cmdlist(i)
+                    cmdlist(i) = cmdlist(j)
+                    cmdlist(j) = temp
+                End If
+            Next
+        Next
+        Dim str As String = ""
+        For cmdi As Integer = 0 To cmdlist.Length - 1
+            Try
+                str += Car(cmdlist(cmdi).CarIdx).device_no.ToString + ","
+                str += comQGWrapper.CST(cmdlist(cmdi).CstIdx).CarrierID.ToString + ","
+                str += cmdlist(cmdi).distance.ToString + ","
+                str += cmdlist(cmdi).EQPwt.ToString + ","
+                str += cmdlist(cmdi).Pwt.ToString + ","
+                str += cmdlist(cmdi).mcstime.ToString + ","
+                str += cmdlist(cmdi).total.ToString + vbCrLf
             Catch ex As Exception
-                settext("EQ2_BG" + Query)
+
             End Try
 
         Next
+        setCommtext(str)
+        For cmdi As Integer = 0 To cmdlist.Length - 1
+            Dim car_i As Integer = cmdlist(cmdi).CarIdx
+            Dim flag1 As Boolean = False
+            For j As Integer = 0 To ListView1.Items.Count - 1
+                If ListView1.Items(j).SubItems(1).Text = Car(car_i).device_no And (Not ListView1.Items(j).SubItems(2).Text = "4" Or (ListView1.Items(j).SubItems(2).Text = "4" And CInt(Car(car_i).get_SOC) <= (85))) Then
+                    flag1 = True
+                    Exit For
+                End If
+            Next
+            If flag1 = False Then
+                'ß‰®Ï®Æ§l ∂}©lß‰CSTT 
+                '•˝±∆ß« ßP¬_SITE 
+                ' Dim car_site_list() As String = Car(car_i).Site.Split(",")
+                If cmd_send_flag = True Then
+                    Exit For
+                End If
+                ' Dim list(comQGWrapper.CST.Length - 1) As Integer
+                Dim i As Integer = cmdlist(cmdi).CstIdx
+                Application.DoEvents()
+                '≥B≤z∂«∞e®∆•Û ´›ßÔ ´ˆ∑”≈v≠´¨£∞e  MCS ≈v≠´ + time ≈v≠´(§¿) + ¶€•[≈v≠´ + ∑j¥M≥Ã∞™≈v≠´ 
+                '≠p∫‚∂Z¬˜  AGV -CST ∂Z¬˜
+                '©R•O∑sºW©Œ¨O≠◊ßÔ •º±∆ß«
+                If Not comQGWrapper.CST(i).CarrierID = "" And ConnectionState = 1 Then
+                    'For j As Integer = 0 To comQGWrapper.Zone.Length - 1
+                    '    If comQGWrapper.CST(i).CarrierLoc = comQGWrapper.Zone(j).ZoneName Then
+                    '        comQGWrapper.Zone(j).CST_count += 1
+                    '    End If
+                    'Next
+                    If comQGWrapper.CST(i).TransferState = GEM.TransferState_Queued Or comQGWrapper.CST(i).TransferState = GEM.TransferState_Transferring Then
+                        'TransferState_Queued
+                        Dim cmd_flag As Integer = 0
+                        For j As Integer = 0 To Car.Length - 1
+                            For k As Integer = 0 To Me.ListView1.Items.Count - 1
+                                If ListView1.Items(k).SubItems(13).Text.ToString = comQGWrapper.CST(i).CommandID Or ListView1.Items(k).SubItems(11).Text.ToString = comQGWrapper.CST(i).CarrierID Then
+                                    cmd_flag = 1
+                                    Exit For
+                                End If
+                            Next
+                        Next
+
+                        If cmd_flag = 0 Then
+                            '®S¶≥©R•O °AßP¬_¨O®ÏπF•ÿ™∫¶a©Œ¨Oº»¶s
+                            '  MsgBox("©R•Oµ≤ßÙ")
+                            setCommtext(comQGWrapper.CST(i).CarrierZoneName + "=" + comQGWrapper.CST(i).DEST)
+                            If Not comQGWrapper.CST(i).CarrierZoneName = comQGWrapper.CST(i).DEST Then
+                                '∂}©l≥B≤z©R•O
+                                '•º®ÏπF•ÿ™∫¶a §U©R•O
+                                Dim reason As String = ""
+                                Dim NextLoc As String = ""
+                                Dim FromPoint, ToPoint As Tag_Point
+
+                                FromPoint = New Tag_Point
+                                ToPoint = New Tag_Point
+                                For j As Integer = 0 To Tag_point_list.Length - 1
+                                    If Tag_point_list(j).LOC = comQGWrapper.CST(i).CarrierLoc And Not comQGWrapper.CST(i).CarrierLoc = "" Then
+                                        'ßP¬_¨OEQ or SHELF
+                                        Dim flag As Boolean = False
+                                        If Tag_point_list(j).tagtype = 3 Then
+
+                                            For k As Integer = 0 To comQGWrapper.EqPort.Length - 1
+                                                '¿À¨d∞T∏π
+                                                If comQGWrapper.EqPort(k).UnLoadAvail = 0 And comQGWrapper.EqPort(k).PortID = Tag_point_list(j).LOC Then
+                                                    flag = True
+                                                End If
+                                            Next
+                                        Else
+                                            For k As Integer = 0 To comQGWrapper.ShelfData.Length - 1
+                                                '¿À¨d™¨∫A
+                                                If comQGWrapper.ShelfData(k).tag_id = Tag_point_list(j).TagId And comQGWrapper.ShelfData(k).Shelf_Status = "" Then
+                                                    flag = True
+                                                End If
+
+                                            Next
+
+                                        End If
+                                        If flag = True Then
+                                            FromPoint = Tag_point_list(j)
+                                            comQGWrapper.CST(i).EQ_Retry = 0
+                                            Exit For
+                                        Else
+                                            comQGWrapper.CST(i).EQ_Retry += 1
+                                            If comQGWrapper.CST(i).EQ_Retry > 200 Then
+                                                reason = "FromNotReady"
+                                                Query = "Delete from mcs_cmd_list where  CARRIERID='" + comQGWrapper.CST(i).CarrierID + "' or REQUEST_TIME < '" + Now.AddDays(-1).ToString("yyyy-MM-dd HH:mm:ss") + "'"
+                                                settext("ßR∞£MCS Cmd EQ Error:" + Query)
+                                                Update_SQL(Query)
+                                                Query = "update mcs_cmd_history  set End_time=now() where  COMMANDID='" + comQGWrapper.CST(i).CommandID + "'"
+                                                Update_SQL(Query)
+                                                comQGWrapper.CST(i).DEST = ""
+                                                comQGWrapper.CST(i).PRIORITY = 0
+                                                comQGWrapper.CST(i).mcstime = 0
+                                                comQGWrapper.CST(i).CommandID = ""
+                                                comQGWrapper.CST(i).CarrierState = GEM.CS_STOREDCOMPLETED
+                                                comQGWrapper.EventReportSendOb(GEM.EVENT_TransferAbortInitiated, comQGWrapper.CST(i))
+                                                comQGWrapper.EventReportSendOb(GEM.EVENT_TransferAbortCompleted, comQGWrapper.CST(i))
+                                                For k As Integer = ListView2.Items.Count - 1 To 0 Step -1
+                                                    Try
+                                                        If ListView2.Items(k).SubItems(0).Text = comQGWrapper.CST(i).CarrierID Then
+                                                            ListView2.Items.RemoveAt(k)
+                                                        End If
+                                                    Catch ex As Exception
+                                                    End Try
+                                                Next
+                                            End If
 
 
-        oConn.Close()
-        oConn.Dispose()
+                                        End If
+
+
+
+                                    End If
+                                Next
+                                '¥N™Òß‰®Ï•ÿ™∫¶a
+                                If comQGWrapper.CST(i).DEST.StartsWith(comQGWrapper.Eqpname.Substring(0, 8)) Then
+                                    Dim tagid As Integer = Search_EMPTY_Shelf(FromPoint.TagId, comQGWrapper.CST(i).DEST, AllBlockPoint, Car(0).Block_Path)
+                                    If tagid > 0 Then
+                                        ToPoint = Tag_point_list(Tag_Point_ByTagid(Tag_point_list, tagid)) '¶^∂«•ÿ™∫¶a
+                                    Else
+                                        'setCommtext("from " + FromPoint.TagId.ToString + "ß‰§£®Ï≤≈¶X™∫•ÿ™∫¶a")
+
+                                        If FromPoint.TagId = 0 Then
+                                            reason = "FromNotReady:From:0"
+                                        Else
+                                            reason = "from " + FromPoint.TagId.ToString + "ß‰§£®Ï≤≈¶X™∫•ÿ™∫¶a"
+                                        End If
+
+                                    End If
+                                Else
+                                    'EQ 
+                                    For j As Integer = 0 To Tag_point_list.Length - 1
+                                        If Tag_point_list(j).LOC = comQGWrapper.CST(i).DEST And Not comQGWrapper.CST(i).DEST = "" Then
+                                            Dim flag As Boolean = False
+                                            If Tag_point_list(j).tagtype = 3 Then
+
+                                                For k As Integer = 0 To comQGWrapper.EqPort.Length - 1
+                                                    If comQGWrapper.EqPort(k).LoadAvail = 0 And comQGWrapper.EqPort(k).PortID = Tag_point_list(j).LOC Then
+                                                        flag = True
+                                                    End If
+                                                Next
+                                            Else
+                                                flag = True
+                                            End If
+                                            'ßP¬_EQ™∫LEQ
+                                            If flag = True Then
+                                                ToPoint = Tag_point_list(j)
+                                                setCommtext("ß‰≤≈¶X™∫EQ" + ToPoint.TagId.ToString())
+                                                Exit For
+                                            Else
+                                                reason = "ToEQNoReady"
+                                                comQGWrapper.CST(i).EQ_Retry += 1
+                                                setCommtext("ToEQNoReady")
+                                            End If
+
+                                        End If
+                                    Next
+                                End If
+                                '•˝®˙±o ®”∑ΩªP•ÿº–™∫ ¶Ï∏midx                           
+                                '•˝ß‰©Ò∏m¶Ï∏m
+                                '¶Aß‰≠n§£≠n∏Û∂«
+                                '¶p™G¶Acommon ™∫∏‹ ¥N∂«®Ï•ÿ™∫¶a 
+                                'øÎ√—•ÿ™∫
+                                '≥Êµß©R•O°A•u∑|¶≥§@µß∑h∞e©R•O
+                                '©R•O¶≥¥X∫ÿ™¨∫A™Ï©l§∆ ∂«∞e º»∞± µ≤ßÙ 
+                                '∏Í∞T CMD ™¨∫A ≠Ï¶] From To NEXT  Pri. Wt 
+                                '•˝´O´˘≠Ï®”¨[∫c
+
+                                Dim site As String = ""
+
+                                If Not FromPoint.site Is Nothing And Not ToPoint.site Is Nothing Then
+
+                                    setCommtext(FromPoint.site + "to" + ToPoint.site)
+                                    reason = FromPoint.site + "to" + ToPoint.site
+                                    site = CheckSite(FromPoint.site, ToPoint.site)
+
+                                    Dim Caridx As Integer = -1
+                                    idx = -1
+                                    If site = "" And Not Car(car_i).Site = "TP,TC" Then
+                                        '§£¶b¨€¶P∞œ∞Ï°Aª›≠n¬‡∂«
+                                        'øÔCOMMON ZONE
+                                        'øÔ®Æ
+                                        '¨£®Æ
+                                        Dim commonzone As Integer = 0
+                                        For j As Integer = Tag_point_list.Length - 1 To 0 Step -1
+                                            '∑j¥M™≈COMMON ZONE
+                                            If Tag_point_list(j).site.IndexOf("common") > -1 Then
+                                                idx = -1
+                                                idx = comQGWrapper.CST_SearchByLoc(Tag_point_list(j).LOC)
+
+                                                If idx = -1 Then
+                                                    '®S¶≥CST∑j¥M ¨Oß_¶≥¬Í¶Ì
+                                                    Dim shelf_idx As Integer = -1
+                                                    For k As Integer = 0 To comQGWrapper.ShelfData.Length - 1
+                                                        If comQGWrapper.ShelfData(k).Shelf_Status = "" And Tag_point_list(j).TagId = comQGWrapper.ShelfData(k).tag_id Then
+                                                            shelf_idx = k
+                                                            Exit For
+                                                        End If
+                                                    Next
+                                                    Dim inline(2) As Integer
+                                                    Dim outline(2) As Integer
+                                                    For k As Integer = 0 To 2
+                                                        inline(k) = 4016 - k * 2
+                                                        outline(k) = 4015 - k * 2
+                                                    Next
+
+                                                    If shelf_idx > -1 Then
+                                                        If FromPoint.TagId < 3000 And Array.IndexOf(inline, Tag_point_list(j).TagId) > -1 Then
+                                                            commonzone = Tag_point_list(j).TagId
+                                                            Exit For
+                                                        ElseIf FromPoint.TagId > 3000 And Array.IndexOf(outline, Tag_point_list(j).TagId) > -1 Then
+                                                            'out 1,2∏π®Æ 3∏πΩu ¿u•˝©Ò3∏πΩu
+                                                            commonzone = Tag_point_list(j).TagId
+                                                            Exit For
+                                                        End If
+                                                        'If Car(car_i).device_no <= 2 Then
+                                                        '    If FromPoint.TagId < 3000 And Array.IndexOf(inline, Tag_point_list(j).TagId) > -1 Then
+                                                        '        'in 1,2∏π®Æ 3∏πΩu ¿u•˝©Ò4∏πΩu
+                                                        '        commonzone = Tag_point_list(j).TagId
+                                                        '        Exit For
+                                                        '    ElseIf FromPoint.TagId > 3000 And FromPoint.TagId < 4000 And Array.IndexOf(outline, Tag_point_list(j).TagId) > -1 Then
+                                                        '        'out 1,2∏π®Æ 3∏πΩu ¿u•˝©Ò3∏πΩu
+                                                        '        commonzone = Tag_point_list(j).TagId
+                                                        '        Exit For
+                                                        '    ElseIf FromPoint.TagId > 4000 And Array.IndexOf(inline, Tag_point_list(j).TagId) > -1 Then
+                                                        '        'out 1,2∏π®Æ 4∏πΩu ¿u•˝©Ò4∏πΩu
+                                                        '        commonzone = Tag_point_list(j).TagId
+                                                        '        Exit For
+                                                        '    End If
+                                                        'Else
+                                                        '    If FromPoint.TagId < 3000 And Array.IndexOf(outline, Tag_point_list(j).TagId) > -1 And (ToPoint.TagId = 3010 Or ToPoint.TagId = 3011 Or ToPoint.TagId = 3013 Or ToPoint.TagId = 3014 Or ToPoint.TagId = 3024 Or ToPoint.TagId = 3025 Or ToPoint.TagId = 3026) Then
+                                                        '        '3∏πΩu™∫æ˜•x ©Ò∂i®”™∫Æ…≠‘¿u•˝®œ•Œ3∏π¬‡∂«∞œ
+                                                        '        commonzone = Tag_point_list(j).TagId
+                                                        '        Exit For
+                                                        '    ElseIf FromPoint.TagId < 3000 And Array.IndexOf(inline, Tag_point_list(j).TagId) > -1 Then
+                                                        '        commonzone = Tag_point_list(j).TagId
+                                                        '        Exit For
+
+                                                        '    ElseIf FromPoint.TagId > 3000 And Array.IndexOf(outline, Tag_point_list(j).TagId) > -1 Then
+                                                        '        commonzone = Tag_point_list(j).TagId
+                                                        '        Exit For
+
+                                                        '    End If
+
+
+
+
+                                                        'End If
+                                                    End If
+                                                End If
+                                            End If
+                                        Next
+                                        If commonzone > 0 Then
+
+                                            If cmd_send_flag = False Then
+                                                Caridx = SELECT_Car(FromPoint.site, car_i)
+                                            End If
+                                            If Caridx > -1 Then
+                                                '
+                                                cmd_flag = Send_CMD_CST(Car(Caridx).device_no, FromPoint.TagId, commonzone, comQGWrapper.CST(i).CarrierID, comQGWrapper.CST(i).CommandID)
+                                                '   ListView1_ReNew()
+                                                If cmd_flag > 0 Then
+                                                    cmd_send_flag = True
+                                                    NextLoc = commonzone.ToString
+                                                    comQGWrapper.CST(i).note = "Send to Car" + Car(Caridx).device_no.ToString
+                                                    If (Car(Caridx).device_no = 1 Or Car(Caridx).device_no = 2) And commonzone = 3003 Then
+                                                        Send_CMD(Car(Caridx).device_no, 1, 3011, "MCS_common")
+                                                    End If
+                                                Else
+                                                    reason = comQGWrapper.CST(i).CarrierID + "commonzone busy"
+                                                End If
+                                            Else
+                                                setCommtext(comQGWrapper.CST(i).CarrierID + "No car to commonzone")
+                                                reason = "No car to commonzone"
+                                            End If
+                                        Else
+                                            setCommtext(comQGWrapper.CST(i).CarrierID + " commonzone full")
+                                            reason = "commonzone full"
+                                        End If
+                                    ElseIf Car(car_i).Site = "TP,TC" Then
+                                        '∏Û∞œ™Ω∂«
+                                        Caridx = car_i
+                                        cmd_flag = Send_CMD_CST(Car(Caridx).device_no, FromPoint.TagId, ToPoint.TagId, comQGWrapper.CST(i).CarrierID, comQGWrapper.CST(i).CommandID)
+                                        ' ListView1_ReNew()
+                                        If cmd_flag > 0 Then
+                                            cmd_send_flag = True
+                                            NextLoc = ToPoint.TagId.ToString
+                                            comQGWrapper.CST(i).note = "Send to Car" + Car(Caridx).device_no.ToString
+                                        Else
+                                            reason = comQGWrapper.CST(i).CarrierID + "SendCmdErr"
+                                        End If
+                                    Else
+                                        '¨€¶P∞œ∞Ï°A™Ω∂«
+                                        'øÔ®Æ
+                                        '¨£®Æ
+                                        If cmd_send_flag = False Then
+                                            Caridx = SELECT_Car(site, car_i)
+                                        End If
+
+                                        If Caridx > -1 Then
+                                            cmd_flag = Send_CMD_CST(Car(Caridx).device_no, FromPoint.TagId, ToPoint.TagId, comQGWrapper.CST(i).CarrierID, comQGWrapper.CST(i).CommandID)
+                                            ' ListView1_ReNew()
+                                            If cmd_flag > 0 Then
+                                                cmd_send_flag = True
+                                                NextLoc = ToPoint.TagId.ToString
+                                                comQGWrapper.CST(i).note = "Send to Car" + Car(Caridx).device_no.ToString
+                                            Else
+                                                reason = comQGWrapper.CST(i).CarrierID + "commonzone busy"
+                                            End If
+                                        Else
+                                            'setCommtext(comQGWrapper.CST(i).CarrierID + " commonzone or AGV busy2")
+                                            reason = "No car to Dest"
+                                        End If
+
+                                    End If
+
+                                    If Caridx > -1 Then
+                                        If cmd_flag > 0 And comQGWrapper.CST(i).TransferState = GEM.TransferState_Queued Then
+                                            Car(Caridx).CommandID = comQGWrapper.CST(i).CommandID
+                                            comQGWrapper.EventReportSendOb(GEM.EVENT_TransferInitiated, comQGWrapper.CST(i))
+                                            comQGWrapper.CST(i).TransferState = GEM.TransferState_Transferring
+                                            ' i = 9999
+                                        Else
+                                            setCommtext(comQGWrapper.CST(i).CarrierID + " Send Cmd Error")
+                                            reason = "Send Cmd Error"
+                                        End If
+
+                                    End If
+
+
+                                End If
+
+                                'ßP¬_µ≤ßÙ 
+                                If cmd_send_flag = False And Not reason = comQGWrapper.CST(i).note Then
+                                    comQGWrapper.CST(i).note = reason
+                                    'wewgwef
+                                    Try
+                                        Query = "update mcs_cmd_list set reason ='" + comQGWrapper.CST(i).note + "' where CARRIERID='" + comQGWrapper.CST(i).CarrierID + "'"
+                                        sqlCommand.CommandText = Query
+                                        sqlCommand.ExecuteNonQuery()
+
+                                    Catch ex As Exception
+                                        settext(Query + ":" + ex.Message)
+                                    End Try
+                                End If
+                            End If
+
+
+                        End If
+
+
+                    End If
+
+
+                End If
+            End If
+
+            Application.DoEvents()
+        Next
+
+
+        For i As Integer = 0 To comQGWrapper.CST.Length - 1
+            If Not comQGWrapper.CST(i).CarrierID = "" And ConnectionState = 1 Then
+
+                If comQGWrapper.CST(i).TransferState = GEM.TransferState_Queued Or comQGWrapper.CST(i).TransferState = GEM.TransferState_Transferring Then
+                    Dim cmd_flag As Integer = 0
+                    For j As Integer = 0 To Car.Length - 1
+                        For k As Integer = 0 To Me.ListView1.Items.Count - 1
+                            If ListView1.Items(k).SubItems(13).Text.ToString = comQGWrapper.CST(i).CommandID Or ListView1.Items(k).SubItems(11).Text.ToString = comQGWrapper.CST(i).CarrierID Then
+                                cmd_flag = 1
+                                Exit For
+                            End If
+                        Next
+                    Next
+
+                    If cmd_flag = 0 Then
+                        '®S¶≥©R•O °AßP¬_¨O®ÏπF•ÿ™∫¶a©Œ¨Oº»¶s
+                        '  MsgBox("©R•Oµ≤ßÙ")
+                        setCommtext(comQGWrapper.CST(i).CarrierZoneName + "=" + comQGWrapper.CST(i).DEST)
+                        If comQGWrapper.CST(i).CarrierZoneName = comQGWrapper.CST(i).DEST Then
+                            comQGWrapper.EventReportSendOb(GEM.EVENT_TransferCompleted, comQGWrapper.CST(i))
+                            Dim Query1 As String = ""
+                            Query1 = "Delete from mcs_cmd_list where CARRIERID='" + comQGWrapper.CST(i).CarrierID + "' or REQUEST_TIME < '" + Now.AddDays(-1).ToString("yyyy-MM-dd HH:mm:ss") + "'"
+
+                            Update_SQL(Query1)
+                            Query1 = "update mcs_cmd_history  set End_time=now() where  COMMANDID='" + comQGWrapper.CST(i).CommandID + "'"
+                            Update_SQL(Query1)
+                            comQGWrapper.CST(i).TransferState = 0
+                            comQGWrapper.CST(i).CommandID = ""
+                            comQGWrapper.CST(i).DEST = ""
+                            For j As Integer = ListView2.Items.Count - 1 To 0 Step -1
+                                Try
+                                    If ListView2.Items(j).SubItems(0).Text = comQGWrapper.CST(i).CarrierID Then
+                                        ListView2.Items.RemoveAt(j)
+
+
+                                    End If
+                                Catch ex As Exception
+                                End Try
+                            Next
+                        End If
+                    End If
+                ElseIf comQGWrapper.CST(i).TransferState = GEM.TransferState_Canceling Then
+                    '®˙Æ¯§§
+                    Dim cmd_flag As Boolean = False
+                    Dim car_flag As Boolean = False
+                    For j As Integer = 0 To Car.Length - 1
+                        For k As Integer = 0 To Me.ListView1.Items.Count - 1
+                            If ListView1.Items(k).SubItems(0).ToString = comQGWrapper.CST(i).CommandID Then
+                                cmd_flag = True
+                                Exit For
+                            End If
+                        Next
+                    Next
+                    For j As Integer = 0 To Car.Length - 1
+                        If Car(j).CommandID = comQGWrapper.CST(i).CommandID Then
+                            car_flag = True
+                            Exit For
+                        End If
+                    Next
+                    If cmd_flag = True And car_flag = True Then
+                        '∂«∞e©R•O
+                        comQGWrapper.EventReportSendOb(GEM.EVENT_TransferInitiated, comQGWrapper.CST(i))
+                        comQGWrapper.CST(i).TransferState = GEM.TransferState_Transferring
+                    Else
+                        ' ®˙Æ¯©R•O ¶^®Ï∂«∞e §§ ¶bGEM≥B≤z
+                    End If
+                ElseIf comQGWrapper.CST(i).TransferState = GEM.TransferState_Aborting Then
+
+                    Dim cmd_flag As Boolean = False
+                    Dim car_flag As Boolean = False
+                    For j As Integer = 0 To Car.Length - 1
+                        For k As Integer = 0 To Me.ListView1.Items.Count - 1
+                            If ListView1.Items(k).SubItems(0).ToString = comQGWrapper.CST(i).CommandID Then
+                                cmd_flag = True
+                                Exit For
+                            End If
+                        Next
+                    Next
+                    For j As Integer = 0 To Car.Length - 1
+                        If Car(j).CommandID = comQGWrapper.CST(i).CommandID Then
+                            car_flag = True
+                            Exit For
+                        End If
+                    Next
+
+                    If cmd_flag And car_flag = False Then
+                        '•i•H®˙Æ¯©R•O
+                        comQGWrapper.EventReportSendOb(GEM.EVENT_TransferAbortCompleted, comQGWrapper.CST(i))
+                        comQGWrapper.CST(i).TransferState = 0
+                        comQGWrapper.CST(i).CommandID = ""
+                        setCommtext(comQGWrapper.CST(i).CarrierID + ":EVENT_TransferAbortCompleted")
+
+                    Else
+                        '∂«∞e©R•O
+                        comQGWrapper.EventReportSendOb(GEM.EVENT_TransferAbortFailed, comQGWrapper.CST(i))
+                        'history
+                        If cmd_flag And car_flag Then
+                            comQGWrapper.CST(i).TransferState = GEM.TransferState_Transferring
+                        Else
+                            comQGWrapper.CST(i).TransferState = GEM.TransferState_Paused
+                        End If
+
+
+                    End If
+                End If
+                '≥B≤zCST ™¨∫A®∆•Û
+                If Not comQGWrapper.CST(i).CarrierState = comQGWrapper.CST(i).Pre_CarrierState Then
+                    Dim Pre_CarrierState As UShort = comQGWrapper.CST(i).Pre_CarrierState
+                    comQGWrapper.CST(i).Pre_CarrierState = comQGWrapper.CST(i).CarrierState
+                    setCommtext(comQGWrapper.CST(i).CarrierID + ":" + Pre_CarrierState.ToString + "->" + comQGWrapper.CST(i).CarrierState.ToString)
+                    If comQGWrapper.CST(i).CarrierState = GEM.CS_TRANSFERRING Then
+                        comQGWrapper.EventReportSendOb(GEM.EVENT_CarrierResumed, comQGWrapper.CST(i))
+                    ElseIf comQGWrapper.CST(i).CarrierState = GEM.CS_STOREDCOMPLETED Then
+                        comQGWrapper.EventReportSendOb(GEM.EVENT_CarrierStored, comQGWrapper.CST(i))
+                    ElseIf comQGWrapper.CST(i).CarrierState = GEM.CS_WAITOUT Then
+                        comQGWrapper.EventReportSendOb(GEM.EVENT_CarrierWaitOut, comQGWrapper.CST(i))
+                    ElseIf comQGWrapper.CST(i).CarrierState = GEM.CS_NONE Then
+                        comQGWrapper.EventReportSendOb(GEM.EVENT_CarrierRemoved, comQGWrapper.CST(i))
+                    ElseIf comQGWrapper.CST(i).CarrierState = GEM.CS_WAITIN Then
+                        comQGWrapper.EventReportSendOb(GEM.EVENT_CarrierWaitIn, comQGWrapper.CST(i))
+                    End If
+
+                End If
+            End If
+            If Not comQGWrapper.CST(i).CarrierZoneName = comQGWrapper.CST(i).DEST And Not comQGWrapper.CST(i).DEST = "" And Not comQGWrapper.CST(i).CarrierID = "" Then
+                Dim item As New ListViewItem()
+                idx = -1
+                item.Text = comQGWrapper.CST(i).CarrierID
+                item.SubItems.Add(comQGWrapper.CST(i).CommandID)
+                item.SubItems.Add(comQGWrapper.CST(i).PRIORITY)
+                item.SubItems.Add(comQGWrapper.CST(i).CarrierZoneName)
+                item.SubItems.Add(comQGWrapper.CST(i).CarrierLoc)
+
+                item.SubItems.Add(comQGWrapper.CST(i).DEST)
+                item.SubItems.Add(comQGWrapper.CST(i).note)
+                item.SubItems.Add(((comQGWrapper.CST(i).mcstime) + comQGWrapper.CST(i).PRIORITY * 10).ToString)
+                item.SubItems.Add(i)
+                item.SubItems.Add(comQGWrapper.CST(i).PROCESSID)
+                item.SubItems.Add(comQGWrapper.CST(i).SOURCE)
+                item.SubItems.Add(comQGWrapper.CST(i).distance.ToString)
+                ' ListView2.Items.Add(item)
+                For j As Integer = 0 To ListView2.Items.Count - 1
+                    If ListView2.Items(j).SubItems(0).Text = comQGWrapper.CST(i).CarrierID Then
+                        idx = j
+                        Exit For
+                    End If
+                Next
+                If idx >= 0 Then
+                    '≠◊ßÔ
+                    Dim flag As Boolean = False
+
+                    For j As Integer = 0 To item.SubItems.Count - 1
+                        If Not item.SubItems(j).Text = ListView2.Items(idx).SubItems(j).Text Then
+                            ListView2.Items(idx).SubItems(j).Text = item.SubItems(j).Text
+                        End If
+                    Next
+                Else
+                    ListView2.Items.Add(item)
+                End If
+                '
+            End If
+        Next
+
+        ' MCS ©R•O≥B≤zßπ
+        For i As Integer = 0 To comQGWrapper.Zone.Length - 1
+            comQGWrapper.Zone(i).ZoneCapacity = comQGWrapper.Zone(i).ZoneSize - comQGWrapper.Zone(i).CST_count - comQGWrapper.Zone(i).DisabledLocations.Split(",").Length
+            If Not comQGWrapper.Zone(i).pre_ZoneCapacity = comQGWrapper.Zone(i).ZoneCapacity And start_flag Then
+                comQGWrapper.EventReportSendOb(GEM.EVENT_ZoneCapacityCange, comQGWrapper.Zone(i).ZoneName + "," + comQGWrapper.Zone(i).ZoneCapacity.ToString + "," + comQGWrapper.Zone(i).ZoneSize.ToString + "," + comQGWrapper.Zone(i).ZoneType.ToString)
+                comQGWrapper.Zone(i).pre_ZoneCapacity = comQGWrapper.Zone(i).ZoneCapacity
+            Else
+                comQGWrapper.Zone(i).pre_ZoneCapacity = comQGWrapper.Zone(i).ZoneCapacity
+            End If
+        Next
+
+        'For i As Integer = 0 To Car.Length - 1
+        '    If Car(i).flag = True And Car(i).Car_type = "CRANE" Then
+
+        '        If Not Car(i).Pre_State = Car(i).State Then
+        '            Car(i).Pre_State = Car(i).State
+        '            If Car(i).State = "IDLE" Then
+        '                comQGWrapper.EventReportSendOb(GEM.EVENT_CraneIdle, Car(i).CommandID + "," + comQGWrapper.Eqpname + "C" + Car(i).device_no.ToString)
+        '            ElseIf Car(i).State = "ACTIVE" Then
+        '                comQGWrapper.EventReportSendOb(GEM.EVENT_CraneActive, Car(i).CommandID + "," + comQGWrapper.Eqpname + "C" + Car(i).device_no.ToString)
+        '            End If
+        '        End If
+        '    End If
+        'Next
         For i As Integer = 0 To Car.Length - 1
             Dim flag As Boolean = False
             For j As Integer = 0 To 52
@@ -6122,38 +8922,1496 @@ Public Class Form1
                 End If
             Next
 
-            If Car(i).BMS1(7) > 1500 And Car(i).BMS1(7) < 7000 And flag = True Then
+            If Car(i).BMS1(7) > 100 And Car(i).BMS1(7) < 7000 And Car(i).BMS2(7) > 4000 And Car(i).BMS2(7) < 7000 And flag = True Then
 
                 Dim file_str As String = ".\log\" + Now.ToString("yyyyMMdd") + "_BMS" + Car(i).device_no.ToString + ".log"
                 Dim filestream As StreamWriter = New StreamWriter(file_str, True)
                 Dim bms As String = int2str(Car(i).BMS1, 0, 53)
                 filestream.WriteLine(Now.ToString("yyyy-MM-dd HH:mm:ss") + ":" + bms)
-                If Car(i).BMS2(7) > 1500 And Car(i).BMS2(7) < 7000 Then
-                    bms = int2str(Car(i).BMS2, 0, 53)
-                    filestream.WriteLine(Now.ToString("yyyy-MM-dd HH:mm:ss") + ":" + bms)
-                End If
-
+                bms = int2str(Car(i).BMS2, 0, 53)
+                filestream.WriteLine(Now.ToString("yyyy-MM-dd HH:mm:ss") + ":" + bms)
                 filestream.Flush()
                 filestream.Close()
             End If
         Next
-    End Sub
 
-    Private Sub EQ_Timer_Tick(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles EQ_Timer.Tick
-        If Me.EQ_BG.IsBusy = False Then
 
-            EQ_BG.RunWorkerAsync()
 
+        Dim mReader As MySqlDataReader
+
+        sqlCommand.Connection = oConn
+        Query = "  SELECT CarrierID,LOC,LM_User FROM `carrierupdate` WHERE UpdateTime < '2021-01-01'"
+        sqlCommand.CommandText = Query
+
+        mReader = sqlCommand.ExecuteReader()
+        Dim cstid As String = ""
+        '  Dim loc As String = ""
+        Dim cstidx As Integer = -1
+        Dim locidx As Integer = -1
+        Dim loc As New Tag_Point
+        Dim cnt As Integer = 0
+        While mReader.Read
+            cnt += 1
+            cstid = mReader.Item(0)
+            ' loc = mReader.Item(1)
+            cstidx = comQGWrapper.CST_SearchByCSTID(cstid)
+            If mReader.Item(1).ToString = "ADDPWT" And (cstidx > -1) Then
+
+
+                comQGWrapper.CST(cstidx).mcstime -= 10000
+
+
+            Else
+                For j As Integer = 0 To Tag_point_list.Length - 1
+                    If Tag_point_list(j).LOC = mReader.Item(1) Then
+                        loc = Tag_point_list(j)
+                        Exit For
+                    End If
+                Next
+                locidx = comQGWrapper.CST_SearchByLoc(loc.LOC)
+                If locidx > -1 Then
+                    '≤æ∞£¬¬™∫CST ¶Ï∏m
+                    If Not comQGWrapper.CST(locidx).CarrierID = cstid Then
+                        comQGWrapper.CST_REMOVE(comQGWrapper.CST(locidx).CarrierID)
+                        Query = "update `carrier`  set LOC_NAME='',LOC_TYPE='4',SUB_LOC='' ,CARRIER_STATUS	=0 "
+                        Query += " where  CARRIER_ID='" + comQGWrapper.CST(locidx).CarrierID + "'"
+                        Update_SQL(Query)
+                    End If
+
+                End If
+
+
+                If cstidx = -1 Then
+                    '∑sºW¶Ï∏m
+                    comQGWrapper.CST_Add(cstid, loc.ZONE_NAME, loc.LOC)
+                    Query = "insert ignore into `carrier` (STK_NAME,CARRIER_ID,LOT_ID,LOC_NAME,LOC_TYPE,SUB_LOC,CARRIER_STATUS,STORED_TIME,REQ_TIME,UPDATE_DATE,UPDATE_BY,CREATE_DATE,CREATE_BY) " + _
+                 "VALUES ('" + comQGWrapper.Eqpname + "', '" + cstid + "', '" + cstid + "','" + loc.ZONE_NAME + "',1,'" + loc.LOC + "', '4', now(), '', now(), 'AGVC', now(), 'AGVC');"
+                    Update_SQL(Query)
+                Else
+                    '≈‹ßÛ¶Ï∏m
+                    comQGWrapper.CST_Change(comQGWrapper.CST(cstidx).CarrierID, loc.ZONE_NAME, loc.LOC, "4")
+                    Query = "update `carrier`  set LOC_NAME='" + loc.ZONE_NAME + "',LOC_TYPE=" + loc.tagtype.ToString + ",SUB_LOC='" + loc.LOC + "' ,CARRIER_STATUS	=" + comQGWrapper.CST(cstidx).CarrierState.ToString
+                    Query += " where  CARRIER_ID='" + cstid + "'"
+                    Update_SQL(Query)
+                End If
+            End If
+
+
+
+        End While
+
+        mReader.Close()
+        If cnt > 0 Then
+            Query = "update `carrierupdate`  set UpdateTime=now() where UpdateTime <'2021-01-01' "
+            sqlCommand.CommandText = Query
+            sqlCommand.ExecuteNonQuery()
         End If
+
+
+
+        oConn.Close()
+        oConn.Dispose()
+        For i As Integer = 0 To comQGWrapper.EqPort.Length - 1
+            If comQGWrapper.EqPort(i).LoadAvail = 0 Then
+                comQGWrapper.EqPort(i).state = "L-Req"
+            ElseIf comQGWrapper.EqPort(i).UnLoadAvail = 0 Then
+                comQGWrapper.EqPort(i).state = "UL-Req"
+            ElseIf comQGWrapper.EqPort(i).ONLINE = 1 Then
+                comQGWrapper.EqPort(i).state = "ONLINE"
+            ElseIf comQGWrapper.EqPort(i).ERR = 1 Then
+                comQGWrapper.EqPort(i).state = "ERROR"
+            Else
+                comQGWrapper.EqPort(i).state = "OFFLINE"
+            End If
+
+            If Not comQGWrapper.EqPort(i).state = comQGWrapper.EqPort(i).PreState Then
+
+                Update_SQL("update port set EQ_State ='" + comQGWrapper.EqPort(i).state + "',PreState='" + comQGWrapper.EqPort(i).PreState + "' where PORT_ID='" + comQGWrapper.EqPort(i).PortID + "'")
+                Update_SQL("INSERT INTO `port_history` (`PortID`, `Status`,PreState, `updatetime`,PreStateTime) VALUES ('" + comQGWrapper.EqPort(i).PortID + "', '" + comQGWrapper.EqPort(i).state + "','" + comQGWrapper.EqPort(i).PreState + "', CURRENT_TIMESTAMP,'" + comQGWrapper.EqPort(i).PreStateTime + "')")
+                comQGWrapper.EqPort(i).PreState = comQGWrapper.EqPort(i).state
+                comQGWrapper.EqPort(i).PreStateTime = Now().ToString("yyyy-MM-dd HH:mm:ss")
+            End If
+        Next
+        For i As Integer = 0 To Car.Length - 1
+            If Not Car(i).Lock_user = "" Then
+                '§‚∞ 
+                Car(i).agv_status = "PM"
+
+            ElseIf (Car(i).flag = False Or Car(i).status = -2) Then
+                Car(i).agv_status = "OffLine"
+            ElseIf Car(i).status = 3 Then
+                Car(i).agv_status = "Manual"
+
+            ElseIf Car(i).device_status(6) = 0 And (Car(i).status = 2 Or Car(i).status = 0) Then
+                If Car(i).cmd_idx = -2 Then
+                    Car(i).agv_status = "Idle"
+                Else
+                    Car(i).agv_status = "Run"
+                End If
+
+            ElseIf Car(i).status = 5 Then
+                If Car(i).device_status(6) = 48 Then
+                    Car(i).agv_status = "Charge"
+                Else
+                    Car(i).agv_status = "Run"
+                End If
+            ElseIf Car(i).status = 4 Or Car(i).status = 1 Or Car(i).status = 4 Or Car(i).status = 12 Or Car(i).status = 8 Then
+                If Car(i).device_status(44) = 1 Then
+                    Car(i).agv_status = "Mapping"
+                ElseIf Car(i).sflag = 1 Then
+                    Car(i).agv_status = "Retreat"
+                Else
+                    Car(i).agv_status = "Run"
+                End If
+
+            ElseIf (Car(i).status = -1) Then
+                Car(i).agv_status = "Down"
+            Else
+                Car(i).agv_status = "OffLine"
+            End If
+            If Not Car(i).agv_status = Car(i).Pre_agv_status And Car(i).device_no > 0 Then
+                Update_SQL("INSERT INTO `agv_status_history` (`AGVNo`, `Status`, `updatetime`, `PreStatus`, `Preupdatetime`) VALUES ('" + Car(i).device_no.ToString + "', '" + Car(i).agv_status + "', CURRENT_TIMESTAMP, '" + Car(i).Pre_agv_status + "', '" + Car(i).agv_status_time + "');")
+                Car(i).Pre_agv_status = Car(i).agv_status
+                Dim VC1_MAX, VC1_MIN As Integer
+                Dim VC2_MAX, VC2_MIN As Integer
+                VC1_MAX = 0
+                VC2_MAX = 0
+                VC1_MIN = 9999
+                VC2_MIN = 9999
+
+                For j As Integer = 18 To 32
+                    If Car(i).BMS1(j) > VC1_MAX Then
+                        VC1_MAX = Car(i).BMS1(j)
+                    End If
+                    If Car(i).BMS1(j) < VC1_MIN Then
+                        VC1_MIN = Car(i).BMS1(j)
+                    End If
+                    If Car(i).BMS2(j) > VC2_MAX Then
+                        VC2_MAX = Car(i).BMS2(j)
+                    End If
+                    If Car(i).BMS1(j) < VC2_MIN Then
+                        VC2_MIN = Car(i).BMS2(j)
+                    End If
+                Next
+                Query = "INSERT INTO `agv_tagid_history` (`AGV_No` ,`Pre_TagID` ,`TagID` ,`RecordTime`,keep_time,cmd_idx,speed,Volt,Loading,Shelf_Car,distance,Temp,Humidity,direction,Auto_Info,AGV_X,AGV_Y,AGV_TH,`VB1`, `IB1`, `BT1`, `SOC1`, `SOH1`, `PROT1`, `STAT1`, `CHG_AH1`, `DSG_AH1`, `CYCLE1`, `VB2`, `IB2`, `BT2`, `SOC2`, `SOH2`, `PROT2`, `STAT2`, `CHG_AH2`, `DSG_AH2`, `CYCLE2`,`VC1_MIN`,`VC1_MAX`,`BT1_2`,`VC2_MIN`,`VC2_MAX`,`BT2_2`,subcmd,bat_SN1,bat_SN2) " + _
+                                 " VALUES ('" + Car(i).device_no.ToString + "', '" + Car(i).Pre_TagID.ToString + "', '" + Car(i).get_tagId.ToString + "', '" + Now().ToString("yyyy-MM-dd HH:mm:ss") + "',''," + Car(i).cmd_sql_idx.ToString + "," + Car(i).get_Speed.ToString + "," + Car(i).get_Volt.ToString + "," + Car(i).device_status(7).ToString + "," + Car(i).get_Shelf_Car_No.ToString + "," + Car(i).get_distance.ToString + "," + Car(i).device_status(21).ToString + "," + Car(i).device_status(22).ToString + "," + Car(i).get_direction.ToString + "," + Car(i).status.ToString + "," + Car(i).AXIS_X.ToString + "," + Car(i).AXIS_Y.ToString + "," + Car(i).AXIS_Z.ToString + _
+                                 "," + Car(i).BMS1(7).ToString + "," + Car(i).BMS1(8).ToString + "," + Car(i).BMS1(10).ToString + "," + Car(i).BMS1(14).ToString + "," + Car(i).BMS1(15).ToString + "," + Car(i).BMS1(16).ToString + "," + Car(i).BMS1(17).ToString + "," + (Car(i).BMS1(37) * 65536 + Car(i).BMS1(38)).ToString + "," + (Car(i).BMS1(39) * 65536 + Car(i).BMS1(40)).ToString + "," + Car(i).BMS1(41).ToString + _
+                                 "," + Car(i).BMS2(7).ToString + "," + Car(i).BMS2(8).ToString + "," + Car(i).BMS2(10).ToString + "," + Car(i).BMS2(14).ToString + "," + Car(i).BMS2(15).ToString + "," + Car(i).BMS2(16).ToString + "," + Car(i).BMS2(17).ToString + "," + (Car(i).BMS2(37) * 65536 + Car(i).BMS2(38)).ToString + "," + (Car(i).BMS2(39) * 65536 + Car(i).BMS2(40)).ToString + "," + Car(i).BMS2(41).ToString + _
+                                 "," + VC1_MIN.ToString + "," + VC1_MAX.ToString + "," + Car(i).BMS1(11).ToString + "," + VC2_MIN.ToString + "," + VC2_MAX.ToString + "," + Car(i).BMS2(11).ToString + _
+                                 ",'" + Car(i).subcmd + "','" + Car(i).bat_SN(0) + "','" + Car(i).bat_SN(1) + "');"
+                Update_SQL(Query)
+
+                Car(i).agv_status_time = Now.ToString("yyyy-MM-dd HH:mm:ss")
+            End If
+        Next
+        If BG_Update.IsBusy = False Then
+            BG_Update.RunWorkerAsync()
+        End If
+
     End Sub
-    Function InttoBitidx(ByVal IntVal As Integer)
-        InttoBitidx = -1
-        For code As Integer = 0 To 15
-            If (IntVal >> code) = 1 Then
-                Return code
+
+    Function QueryPosition(ByVal tagid As Integer) As String
+        QueryPosition = ""
+        For i As Integer = 0 To Tag_point_list.Length - 1
+
+            Tag_point_list(i).TagId = tagid
+            Return Tag_point_list(i).floor
+        Next
+    End Function
+    Function CheckSite(ByVal SiteA As String, ByVal SiteB As String) As String
+        CheckSite = ""
+        Dim SiteAList() As String = SiteA.Split(",")
+        Dim SiteBList() As String = SiteB.Split(",")
+        Dim idx As Integer = 0
+        For i As Integer = 0 To SiteAList.Length - 1
+            If Array.IndexOf(SiteBList, SiteAList(i)) > -1 Then
+                Return SiteAList(i)
+                If idx = 0 Then
+                    CheckSite = SiteAList(i)
+                Else
+                    CheckSite += "," + SiteAList(i)
+                End If
             End If
         Next
 
+    End Function
+    Function SELECT_Car(ByVal Site As String, ByVal car_idx As Integer) As Integer
+        SELECT_Car = -1
+        Dim sitelist() As String = Site.Split(",")
+        Dim idx As Integer = 0
+        Dim car_site_list() As String = Car(car_idx).Site.Split(",")
+        For j As Integer = 0 To car_site_list.Length - 1
+            If Array.IndexOf(sitelist, car_site_list(j)) > -1 Then
+                SELECT_Car = car_idx
+            End If
+        Next
+
+
+
+
+
+    End Function
+    Dim port_time As Integer = 0
+    ' Dim chaanger As Integer = 0
+    Private Sub EQ_BG_DoWork(ByVal sender As System.Object, ByVal e As System.ComponentModel.DoWorkEventArgs) Handles EQ_BG.DoWork
+        Dim oConn As MySqlConnection
+        Dim sqlCommand As New MySqlCommand
+        Dim Query As String = ""
+        oConn = New MySqlConnection(Mysql_str)
+        oConn.Open()
+        sqlCommand.Connection = oConn
+
+
+
+     
+        For i As Integer = 0 To eqp_client.Length - 1
+            If My.Computer.Network.Ping(eqp_client(i).ipadress) Then
+
+                Dim readflag As Boolean = False
+                readflag = eqp_client(i).Read_DI()
+                For j As Integer = 0 To comQGWrapper.EqPort.Length - 1
+                    If eqp_client(i).ipadress = comQGWrapper.EqPort(j).ip And eqp_client(i).port = comQGWrapper.EqPort(j).port Then
+                        comQGWrapper.EqPort(j).ONLINE = eqp_client(i).DI(0)
+                        comQGWrapper.EqPort(j).ERR = eqp_client(i).DI(1)
+                        comQGWrapper.EqPort(j).READY = eqp_client(i).DI(comQGWrapper.EqPort(j).adr)
+                        comQGWrapper.EqPort(j).LOADED = eqp_client(i).DI(comQGWrapper.EqPort(j).adr + 1)
+                        If comQGWrapper.EqPort(j).READY = 1 And comQGWrapper.EqPort(j).ONLINE = 1 And comQGWrapper.EqPort(j).ERR = 0 Then
+                            If port_time = 60 Then
+                                comQGWrapper.EventReportSendOb(GEM.EVENT_PortInService, comQGWrapper.EqPort(j).PortID)
+                                comQGWrapper.EventReportSendOb(GEM.EVENT_LoadRequestReport, comQGWrapper.EqPort(j).PortID + "," + comQGWrapper.EqPort(j).LoadAvail.ToString + "," + comQGWrapper.EqPort(j).UnLoadAvail.ToString)
+                            End If
+                            If comQGWrapper.EqPort(j).LOADED = 1 Then
+                                '¶≥∏¸ ®∫¥N¨Oonload req
+                                If Not (comQGWrapper.EqPort(j).LoadAvail = 1 And comQGWrapper.EqPort(j).UnLoadAvail = 0) Then
+                                    comQGWrapper.EqPort(j).LoadAvail = 1
+                                    comQGWrapper.EqPort(j).UnLoadAvail = 0
+                                    If Not port_time = 60 Then
+                                        comQGWrapper.EventReportSendOb(GEM.EVENT_PortInService, comQGWrapper.EqPort(j).PortID)
+                                    End If
+
+                                    Thread.Sleep(100)
+                                    comQGWrapper.EventReportSendOb(GEM.EVENT_LoadRequestReport, comQGWrapper.EqPort(j).PortID + "," + comQGWrapper.EqPort(j).LoadAvail.ToString + "," + comQGWrapper.EqPort(j).UnLoadAvail.ToString)
+                                End If
+                            Else
+                                If Not (comQGWrapper.EqPort(j).LoadAvail = 0 And comQGWrapper.EqPort(j).UnLoadAvail = 1) Then
+                                    comQGWrapper.EqPort(j).LoadAvail = 0
+                                    comQGWrapper.EqPort(j).UnLoadAvail = 1
+                                    If Not port_time = 60 Then
+                                        comQGWrapper.EventReportSendOb(GEM.EVENT_PortInService, comQGWrapper.EqPort(j).PortID)
+                                    End If
+                                    Thread.Sleep(100)
+                                    comQGWrapper.EventReportSendOb(GEM.EVENT_LoadRequestReport, comQGWrapper.EqPort(j).PortID + "," + comQGWrapper.EqPort(j).LoadAvail.ToString + "," + comQGWrapper.EqPort(j).UnLoadAvail.ToString)
+                                End If
+                                End If
+                        Else
+                                If Not (comQGWrapper.EqPort(j).LoadAvail = 1 And comQGWrapper.EqPort(j).UnLoadAvail = 1) Then
+                                    comQGWrapper.EqPort(j).LoadAvail = 1
+                                    comQGWrapper.EqPort(j).UnLoadAvail = 1
+                                    comQGWrapper.EventReportSendOb(GEM.EVENT_LoadRequestReport, comQGWrapper.EqPort(j).PortID + "," + comQGWrapper.EqPort(j).LoadAvail.ToString + "," + comQGWrapper.EqPort(j).UnLoadAvail.ToString)
+                                End If
+
+
+                        End If
+
+                    End If
+                Next
+            End If
+        Next
+
+        port_time += 1
+        If port_time > 60 Then
+            port_time = 0
+        End If
+        For i As Integer = 0 To ChargerClient.Length - 1
+            Try
+                If My.Computer.Network.Ping(ChargerClient(i).ipadress) Then
+                    'Dim readflag As Boolean = False
+                    'setCommtext("Ping->" + ChargerClient(i).EQ_ID + ":" + ChargerClient(i).ipadress)
+                    Dim BMS1(50) As Integer
+                    Dim BMS2(50) As Integer
+                    Dim BMS1_fw As String = ""
+                    Dim BMS2_fw As String = ""
+                    Dim ToCharger(20) As Integer
+                    ToCharger(0) = Now.Second
+                    Dim VC1_MIN, VC1_MAX, VC2_MIN, VC2_MAX As Integer
+                    ChargerClient(i).ReadOK = ChargerClient(i).Read_HoldingReg(ChargerClient(i).HoldingReg, 60, ChargerClient(i).HoldingResponse)
+                    ' ChargerClient(i).Write_HoldingReg(200, 1, ToCharger)
+                    Dim Status As String = "Auto"
+
+
+
+
+                    If ChargerClient(i).HoldingResponse(19) > 0 Then
+                        If Not ChargerClient(i).HoldingResponse(19) = ChargerClient(i).Pre_State Then
+                            Query = "INSERT ignore INTO  `alarm` (`cmd_idx`, `HAPPEN_DATE`, `CLEAR_DATE`, `ALM_ID`, `ALM_DEVICE`, `ALM_TYPE`, `ALM_MSG`, `SUB_LOC`, `ALARM_SPACE`, `CST_ID`) "
+                            Query += "VALUES ('',now(),now(), '" + (3000 + ChargerClient(i).HoldingResponse(19)).ToString + "', '" + ChargerClient(i).tag_id.ToString + "', '', '', '" + ChargerClient(i).tag_id.ToString + "', '', '') ;"
+                            sqlCommand.CommandText = Query
+                            sqlCommand.ExecuteNonQuery()
+                            ChargerClient(i).Pre_State = ChargerClient(i).HoldingResponse(19)
+                        End If
+                        Status = "DOWN"
+                    ElseIf ChargerClient(i).HoldingResponse(18) = 0 Then
+                        Status = "Manual"
+                    ElseIf ChargerClient(i).HoldingResponse(18) = 2 Then
+                        Dim BMS1_serial(16) As Integer
+                        Dim BMS2_serial(16) As Integer
+                        Status = "ManualCharge"
+                        ChargerClient(i).ReadOK = ChargerClient(i).Read_HoldingReg(3053, 16, BMS1_serial)
+                        ChargerClient(i).ReadOK = ChargerClient(i).Read_HoldingReg(3153, 16, BMS2_serial)
+                        BMS1_fw = int2bytestr(BMS1_serial, 0, 16)
+                        BMS2_fw = int2bytestr(BMS2_serial, 0, 16)
+                        ChargerClient(i).SN1 = BMS1_fw
+                        ChargerClient(i).SN2 = BMS2_fw
+                        ChargerClient(i).Read_HoldingReg(3000, 50, BMS1)
+                        ChargerClient(i).Read_HoldingReg(3100, 50, BMS2)
+                        ChargerClient(i).BMS1 = BMS1.Clone
+                        ChargerClient(i).BMS2 = BMS2.Clone
+
+                        VC1_MIN = GetVcMin(BMS1)
+                        VC1_MAX = GetVcMax(BMS1)
+                        VC2_MIN = GetVcMin(BMS2)
+                        VC2_MAX = GetVcMax(BMS2)
+                        'πq¶¿ßP¬_
+                        '≤ƒ§@∂•¨q§W¶Ï≤ß±` 
+
+                        'πq¶¿1 ™¨∫A≤ß±`
+                        If ChargerClient(i).BMS1(16) > 0 Then
+                            If (BmsAlertIdx And ChargerClient(i).BMS1(16)) > 0 And ChargerClient(i).BMS1(16) Then
+                                If InttoBitidx(ChargerClient(i).BMS1(16)) <> 11 And InttoBitidx(ChargerClient(i).BMS1(16)) <> 10 Then
+                                    ToCharger(20) = 30000 + InttoBitidx(ChargerClient(i).BMS1(16))
+                                End If
+
+                            ElseIf (BmsWarmIdx And ChargerClient(i).BMS1(16)) > 0 Then
+                                If InttoBitidx(ChargerClient(i).BMS2(16)) <> 11 And InttoBitidx(ChargerClient(i).BMS1(16)) <> 10 Then
+                                    ToCharger(20) = 30000 + InttoBitidx(ChargerClient(i).BMS1(16))
+                                End If
+
+                            End If
+                        End If
+                        'πq¶¿1  BMSµw≈È≤ß±`
+                        If ChargerClient(i).BMS1(17) >= 64 Then
+                            ToCharger(20) = 30016 + InttoBitidx(ChargerClient(i).BMS1(17))
+                        End If
+
+                        'πq¶¿2 ™¨∫A≤ß±`
+                        If ChargerClient(i).BMS2(16) > 0 Then
+                            If (BmsAlertIdx And ChargerClient(i).BMS2(16)) > 0 Then
+                                ToCharger(20) = 30100 + InttoBitidx(ChargerClient(i).BMS2(16))
+                            End If
+                        End If
+                        'πq¶¿2 BMSµw≈È≤ß±`
+                        If ChargerClient(i).BMS2(17) >= 64 Then
+                            ToCharger(20) = 30116 + InttoBitidx(ChargerClient(i).BMS2(17))
+                        End If
+
+
+
+
+                        Dim bms1check, bms2check As Integer
+                        bms1check = Car(0).CheckBms(ChargerClient(i).BMS1, ChargerClient(i).BMSAlarm1)
+                        bms2check = Car(0).CheckBms(ChargerClient(i).BMS2, ChargerClient(i).BMSAlarm2)
+                        '≠n¶≥§ﬂ∏ı§~∞ª¥˙≤ß±`
+
+                        'πq¶¿§@ §W¶Ï∞ª¥˙≤ß±`
+                        If ChargerClient(i).BMSAlarm1(17) = 0 Then
+                            If bms1check > 0 Then
+                                If (BmsAlertIdx And bms1check) > 0 Then
+                                    ToCharger(20) = 30032 + InttoBitidx(bms1check)
+                                   
+                                End If
+                            End If
+                        End If
+
+                        'πq¶¿§G §W¶Ï∞ª¥˙≤ß±`
+                        If ChargerClient(i).BMSAlarm2(17) = 0 Then
+                            If bms2check > 0 Then
+                                If (BmsAlertIdx And bms1check) > 0 Then
+                                    ToCharger(20) = 30132 + InttoBitidx(bms2check)
+
+                                End If
+                            End If
+                        End If
+
+                        If ChargerClient(i).BMSAlarm1(17) > 300 Then
+                            ' ToCharger(20) = 30065 '•ø±`≥sΩu•B§ﬂ∏ı≤ß±`
+
+                        End If
+                        If ChargerClient(i).BMSAlarm2(17) > 300 Then
+                            ' ToCharger(20) = 30165 '•ø±`≥sΩu•B§ﬂ∏ı≤ß±`
+
+                        End If
+
+
+
+
+                        Dim file_str As String = ".\log\" + Now.ToString("yyyyMMdd") + "_BMS_C" + ChargerClient(i).EQ_ID.ToString + ".log"
+                        Dim filestream As StreamWriter = New StreamWriter(file_str, True)
+
+                        If BMS1(0) = 6 Then
+                            Dim bms As String = int2str(BMS1, 0, 50)
+                            filestream.WriteLine(Now.ToString("yyyy-MM-dd HH:mm:ss") + ":" + bms)
+                        End If
+                        If BMS2(0) = 6 Then
+                            Dim bms As String = int2str(BMS2, 0, 50)
+                            filestream.WriteLine(Now.ToString("yyyy-MM-dd HH:mm:ss") + ":" + bms)
+                        End If
+
+                        filestream.Flush()
+                        filestream.Close()
+                    ElseIf ChargerClient(i).HoldingResponse(7) > 0 Then
+                        Status = "RUN"
+                    End If
+                    'ToCharger(20) = chaanger
+                    ' If ToCharger(20) > 0 Then
+                    ChargerClient(i).Write_HoldingReg(200, 21, ToCharger)
+                    ' End If
+
+                    Dim Amp As Integer = 0
+                    Dim Volt As Integer = 0
+                    For j As Integer = 0 To Car.Length - 1
+                        If Car(j).get_tagId = ChargerClient(i).tag_id And Car(j).device_status(6) = 48 Then
+                            Amp = Car(j).get_AMP
+                            Volt = Car(j).get_BMSVolt
+                        End If
+                    Next
+                    Try
+                        Dim step_time As String = ChargerClient(i).HoldingResponse(34).ToString + ChargerClient(i).HoldingResponse(35).ToString + ChargerClient(i).HoldingResponse(36).ToString
+                        Dim totaltime As String = ChargerClient(i).HoldingResponse(37).ToString + ChargerClient(i).HoldingResponse(38).ToString + ChargerClient(i).HoldingResponse(39).ToString
+                        Dim chargerstatus As Integer = 0
+                        If ChargerClient(i).HoldingResponse(19) > 0 Then
+                            chargerstatus = -1
+                        ElseIf ChargerClient(i).HoldingResponse(18) = 2 Then
+                            '§‚∞ •Rπq
+                            chargerstatus = 3
+                        ElseIf ChargerClient(i).HoldingResponse(7) > 10000 Or (ChargerClient(i).HoldingResponse(23) << 16) + ChargerClient(i).HoldingResponse(22) > 2 Then
+                            chargerstatus = 2
+                        Else
+                            chargerstatus = ChargerClient(i).HoldingResponse(18)
+                        End If
+                        If (ChargerClient(i).HoldingResponse(7) > 0 And ChargerClient(i).HoldingResponse(7) < 10000) Or (ChargerClient(i).HoldingResponse(7) > 10000 And ChargerClient(i).HoldingResponse(0) > 0) Or (ChargerClient(i).HoldingResponse(18) = 2) Or (ChargerClient(i).HoldingResponse(52) > 0) Then
+                            Dim carno As Integer = 0
+                            For j As Integer = 0 To Car.Length - 1
+                                If Car(j).get_tagId = ChargerClient(i).tag_id And chargerstatus = 2 Then
+                                    carno = Car(j).device_no
+
+                                End If
+                            Next
+                            Query = "INSERT ignore INTO `agv`.`charger_history` (`tagid`, `X`, `Y`, `T1`, `ForkLocation`,LineT, `AutoStatus`, `Err`, `OUT_V`, `OUT_A`, `OUT_Watt`,OUT_T, " + _
+                                               "`OUT_mAh`, `OUT_Wh`, `steptime`, `totaltime`, `STEPIndex`, `IN_V`, `IN_A`, `IN_Watt`, `IN_kWh`, `IN_totaltime`,carno,OUT_T2, `VB1`, `IB1`, `BT1`, `SOC1`, `SOH1`, `PROT1`, `STAT1`, `CHG_AH1`, `DSG_AH1`, `CYCLE1`, `VB2`, `IB2`, `BT2`, `SOC2`, `SOH2`, `PROT2`, `STAT2`, `CHG_AH2`, `DSG_AH2`, `CYCLE2`,`VC1_MIN`,`VC1_MAX`,`BT1_2`,`VC2_MIN`,`VC2_MAX`,`BT2_2`,bms1_fw,bms2_fw) " + _
+                                               "VALUES ('" + ChargerClient(i).tag_id.ToString + "', '" + ChargerClient(i).HoldingResponse(1).ToString + "', '" + ChargerClient(i).HoldingResponse(2).ToString + "', '" + ChargerClient(i).HoldingResponse(3).ToString + "'," + _
+                                               " '" + ChargerClient(i).HoldingResponse(7).ToString + "', '" + ChargerClient(i).HoldingResponse(8).ToString + "', '" + chargerstatus.ToString + "', '" + ChargerClient(i).HoldingResponse(19).ToString + "', '" + ((ChargerClient(i).HoldingResponse(21) << 16) + ChargerClient(i).HoldingResponse(20)).ToString + "'," + _
+                                               " '" + ((ChargerClient(i).HoldingResponse(23) << 16) + ChargerClient(i).HoldingResponse(22)).ToString + "', '" + ((ChargerClient(i).HoldingResponse(25) << 16) + ChargerClient(i).HoldingResponse(24)).ToString + "', '" + ((ChargerClient(i).HoldingResponse(27) << 16) + ChargerClient(i).HoldingResponse(26)).ToString + "', '" + ((ChargerClient(i).HoldingResponse(29) << 16) + ChargerClient(i).HoldingResponse(28)).ToString + "', " + _
+                                               " '" + ((ChargerClient(i).HoldingResponse(31) << 16) + ChargerClient(i).HoldingResponse(30)).ToString + "', '" + step_time + "', " + _
+                                               " '" + totaltime + "', '" + ChargerClient(i).HoldingResponse(40).ToString + "', '" + ChargerClient(i).HoldingResponse(50).ToString + "' " + _
+                                               ", '" + ChargerClient(i).HoldingResponse(52).ToString + "', '" + ChargerClient(i).HoldingResponse(24).ToString + "', '" + ChargerClient(i).HoldingResponse(56).ToString + "', '" + ChargerClient(i).HoldingResponse(58).ToString + "'," + carno.ToString + ",'" + ChargerClient(i).HoldingResponse(9).ToString + "'" + _
+                                "," + BMS1(7).ToString + "," + BMS1(8).ToString + "," + BMS1(10).ToString + "," + BMS1(14).ToString + "," + BMS1(15).ToString + "," + BMS1(16).ToString + "," + BMS1(17).ToString + "," + (BMS1(37) * 65536 + BMS1(38)).ToString + "," + (BMS1(39) * 65536 + BMS1(40)).ToString + "," + BMS1(41).ToString + _
+                               "," + BMS2(7).ToString + "," + BMS2(8).ToString + "," + BMS2(10).ToString + "," + BMS2(14).ToString + "," + BMS2(15).ToString + "," + BMS2(16).ToString + "," + BMS2(17).ToString + "," + (BMS2(37) * 65536 + BMS2(38)).ToString + "," + (BMS2(39) * 65536 + BMS2(40)).ToString + "," + BMS2(41).ToString + _
+                               "," + VC1_MIN.ToString + "," + VC1_MAX.ToString + "," + BMS1(11).ToString + "," + VC2_MIN.ToString + "," + VC2_MAX.ToString + "," + BMS2(11).ToString + _
+                                ",'" + BMS1_fw + "','" + BMS2_fw + "');"
+                            sqlCommand.CommandText = Query
+                            sqlCommand.ExecuteNonQuery()
+                        End If
+
+                        Query = "update  `charger`  set Status ='" + Status + "',err=" + ChargerClient(i).HoldingResponse(19).ToString + ",Amp=" + Amp.ToString + ",Volt=" + Volt.ToString + " where PORT_ID='" + ChargerClient(i).EQ_ID + "'"
+                        sqlCommand.CommandText = Query
+                        sqlCommand.ExecuteNonQuery()
+                        Query = "update  `charger_status`  set X ='" + ChargerClient(i).HoldingResponse(1).ToString + "',Y=" + ChargerClient(i).HoldingResponse(2).ToString + ",T1=" + ChargerClient(i).HoldingResponse(3).ToString + ",ForkLocation=" + ChargerClient(i).HoldingResponse(7).ToString + ",LineT=" + ChargerClient(i).HoldingResponse(8).ToString + _
+                            ",AutoStatus ='" + chargerstatus.ToString + "',Err=" + ChargerClient(i).HoldingResponse(19).ToString + ",OUT_V=" + ((ChargerClient(i).HoldingResponse(21) << 16) + ChargerClient(i).HoldingResponse(20)).ToString + ",OUT_A=" + ((ChargerClient(i).HoldingResponse(23) << 16) + ChargerClient(i).HoldingResponse(22)).ToString + _
+                            ",OUT_Watt ='" + ((ChargerClient(i).HoldingResponse(25) << 16) + ChargerClient(i).HoldingResponse(24)).ToString + "',OUT_T=" + ((ChargerClient(i).HoldingResponse(27) << 16) + ChargerClient(i).HoldingResponse(26)).ToString + ",OUT_mAh=" + ((ChargerClient(i).HoldingResponse(29) << 16) + ChargerClient(i).HoldingResponse(28)).ToString + ",OUT_Wh=" + ((ChargerClient(i).HoldingResponse(31) << 16) + ChargerClient(i).HoldingResponse(30)).ToString + _
+                            ",steptime ='" + step_time + "',totaltime=" + totaltime + ",STEPIndex=" + ChargerClient(i).HoldingResponse(40).ToString + ",IN_V=" + ChargerClient(i).HoldingResponse(50).ToString + _
+                             ",IN_A ='" + ChargerClient(i).HoldingResponse(52).ToString + "',IN_Watt=" + ChargerClient(i).HoldingResponse(54).ToString + ",IN_kWh=" + ChargerClient(i).HoldingResponse(56).ToString + ",IN_totaltime=" + ChargerClient(i).HoldingResponse(58).ToString + _
+                              ",cur_time =now() ,out_t2='" + ChargerClient(i).HoldingResponse(9).ToString + "'" + _
+                               ",VB1=" + BMS1(7).ToString + ",IB1=" + BMS1(8).ToString + " ,BT1=" + BMS1(10).ToString + ",SOC1=" + BMS1(14).ToString + ",SOH1=" + BMS1(15).ToString + _
+                            ",PROT1=" + BMS1(16).ToString + ",STAT1=" + BMS1(17).ToString + " ,CHG_AH1=" + (BMS1(37) * 65536 + BMS1(38)).ToString + ",DSG_AH1=" + (BMS1(39) * 65536 + BMS1(40)).ToString + ",CYCLE1=" + BMS1(41).ToString + _
+                             ",VB2=" + BMS2(7).ToString + ",IB2=" + BMS2(8).ToString + " ,BT2=" + BMS2(10).ToString + ",SOC2=" + BMS2(14).ToString + ",SOH2=" + BMS2(15).ToString + _
+                            ",PROT2=" + BMS2(16).ToString + ",STAT2=" + BMS2(17).ToString + " ,CHG_AH2=" + (BMS2(37) * 65536 + BMS2(38)).ToString + ",DSG_AH2=" + (BMS2(39) * 65536 + BMS2(40)).ToString + ",CYCLE2=" + BMS2(41).ToString + _
+                             ",VC1_MAX=" + VC1_MAX.ToString + ",VC1_MIN=" + VC1_MIN.ToString + " ,VC2_MAX=" + VC2_MAX.ToString + ",VC2_MIN=" + VC2_MIN.ToString + ",BT1_2=" + BMS1(11).ToString + ",BT2_2=" + BMS2(11).ToString + ",BMS1_fw='" + BMS1_fw + "',BMS2_fw='" + BMS2_fw + "'" + _
+                            " where tagid=" + ChargerClient(i).tag_id.ToString
+                        sqlCommand.CommandText = Query
+                        sqlCommand.ExecuteNonQuery()
+                    Catch ex As Exception
+                        settext("EQ_BQ " + Query)
+                    End Try
+                Else
+                    Query = "update  `charger_status`  set AutoStatus =-2" + _
+                     " where tagid=" + ChargerClient(i).tag_id.ToString
+                    sqlCommand.CommandText = Query
+                    sqlCommand.ExecuteNonQuery()
+                    ChargerClient(i).ReadOK = False
+                End If
+
+
+            Catch ex As Exception
+
+            End Try
+        Next
+        '≥B≤zAGV®Æ§lπq¶¿≤ß±`
+
+
+
+
+        oConn.Close()
+        oConn.Dispose()
+
+    End Sub
+
+    Private Sub Button26_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button26.Click
+        comQGWrapper.UpdateSV(GEM_SC_STATE, GEM.SC_PAUSING)
+        For i As Integer = 0 To car_no - 1
+            Car(i).online = False
+        Next
+        Button7.Text = "OFFLINE"
+    End Sub
+
+ 
+    Dim temp As GEM.Carrier
+
+
+    Private Sub PictureBox4_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles agv_info.Click
+
+    End Sub
+    Dim showType As Integer = 0
+    Dim view_eq_idx As Integer = 0
+    Private Sub PictureBox4_Paint(ByVal sender As Object, ByVal e As System.Windows.Forms.PaintEventArgs) Handles agv_info.Paint
+
+        'RM
+        ' Dim pen_ As Pen
+        'Dim mycolor1 As New SolidBrush(Color.Green)   '©w∏q¶r≈È√C¶‚
+        Dim x As Integer = 10
+        Dim y As Integer = 5
+        Dim offset As Integer = 80
+        If showType = 1 Then
+            'AGV RM
+            e.Graphics.DrawString("AGV info", New Font("Gill Sans MT", 12, FontStyle.Regular), New SolidBrush(Color.Green), x, y) 'µe•¨ºg§W¶r¶Í
+            y += 30
+            e.Graphics.DrawString("AGVID", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(Car(view_car_idx).device_no.ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("Location:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(Car(view_car_idx).get_tagId().ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString("(" + Car(view_car_idx).AXIS_X.ToString + "," + Car(view_car_idx).AXIS_Y.ToString + "," + Car(view_car_idx).AXIS_Z.ToString + ")", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset + 40, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("CarrierID:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(Car(view_car_idx).get_cstid().ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("Cmd:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(Car(view_car_idx).subcmd, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            Dim b1 As Double
+            If Car(view_car_idx).BMS1(8) > 32765 Then
+                b1 = -(65535 - Car(view_car_idx).BMS1(8)) / 10
+            Else
+                b1 = Car(view_car_idx).BMS1(8) / 10
+            End If
+            If Car(view_car_idx).BMS2(8) > 32765 Then
+                b1 += -(65535 - Car(view_car_idx).BMS2(8)) / 10
+            Else
+                b1 += Car(view_car_idx).BMS2(8) / 10
+            End If
+
+            e.Graphics.DrawString("SOC: ", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(Car(view_car_idx).BMS1(14).ToString + "%  " + Car(view_car_idx).BMS2(14).ToString + "%(" + Round(b1, 1).ToString + " A)", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+
+            e.Graphics.DrawString("T1:" + Car(view_car_idx).T1.ToString + "      T2:" + Car(view_car_idx).T2.ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("T3:" + Car(view_car_idx).T3.ToString + "      T4:" + Car(view_car_idx).T4.ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            'Fork HP
+            e.Graphics.DrawString("StayTime:" + DateDiff(DateInterval.Second, CDate(Car(view_car_idx).Pre_TagID_time), CDate(Now())).ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("Area:" + Car(view_car_idx).Site, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+
+            Dim rect As New Rectangle(x, y, 15, 15)
+            Dim iolist(11) As String
+            Dim IOdata(11) As Boolean
+            If Car(view_car_idx).status > -2 Then
+
+
+                iolist(0) = "FORK HP"
+                IOdata(0) = If((Car(view_car_idx).device_status(31) >> 2) Mod 2 = 1, True, False)
+
+                iolist(1) = "LFT HP"
+                IOdata(1) = If((Car(view_car_idx).device_status(30) >> 8) Mod 2 = 1, True, False)
+                iolist(2) = "TURN HP"
+                IOdata(2) = If((Car(view_car_idx).device_status(30) >> 13) Mod 2 = 1, True, False)
+                iolist(3) = "æÓ≤æ HP"
+                IOdata(3) = If((Car(view_car_idx).device_status(30) >> 5) Mod 2 = 1, True, False)
+
+                iolist(4) = "Auto"
+                IOdata(4) = If(Car(view_car_idx).get_auto = 0 And Car(view_car_idx).flag, True, False)
+                iolist(5) = "Error"
+                IOdata(5) = If(Car(view_car_idx).get_Err() > 0, True, False)
+
+                iolist(6) = "Online"
+                IOdata(6) = If(Car(view_car_idx).status < 0 Or Car(view_car_idx).flag = False, False, True)
+                iolist(7) = "Busy"
+                IOdata(7) = If(Car(view_car_idx).device_status(14) > 0, True, False)
+                iolist(8) = "Load"
+                IOdata(8) = If(Car(view_car_idx).get_loading >= 3, True, False)
+                iolist(9) = "RUN"
+                IOdata(9) = If(Car(view_car_idx).device_status(15) > 0, True, False)
+                iolist(10) = "Map"
+                IOdata(10) = If(Car(view_car_idx).device_status(13) > 0, True, False)
+                iolist(11) = ""
+            End If
+            For i As Integer = 0 To (iolist.Length) / 3 - 1
+                y += 20
+                x = 5
+                For j As Integer = 0 To 2
+                    rect = New Rectangle(x, y, 15, 15)
+                    If IOdata(i * 3 + j) Then
+                        e.Graphics.FillEllipse(New SolidBrush(Color.Green), rect)
+                    End If
+
+                    e.Graphics.DrawEllipse(New Pen(Color.Black, 1), rect)
+
+                    e.Graphics.DrawString(iolist(i * 3 + j), New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.Blue), x + 20, y) 'µe•¨ºg§W¶r¶Í
+                    x += 80
+                Next
+
+
+            Next
+        ElseIf showType = 2 Then
+            'EQ
+            Dim PORT_STN As Tag_Point = New Tag_Point
+            For i As Integer = 0 To Tag_point_list.Length - 1
+                If Tag_point_list(i).TagId = comQGWrapper.EqPort(view_eq_idx).tag_id Then
+                    PORT_STN = Tag_point_list(i)
+                    Exit For
+                End If
+            Next
+
+            e.Graphics.DrawString("EQ info", New Font("Gill Sans MT", 12, FontStyle.Regular), New SolidBrush(Color.Green), x, y) 'µe•¨ºg§W¶r¶Í
+            y += 30
+            e.Graphics.DrawString("PortID:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(comQGWrapper.EqPort(view_eq_idx).PortID, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("PortNo:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(PORT_STN.stkval, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            Dim idx As Integer = comQGWrapper.CST_SearchByLoc(comQGWrapper.EqPort(view_eq_idx).PortID)
+
+            y += 18
+            If idx > -1 Then
+
+                e.Graphics.DrawString("CST:" + comQGWrapper.CST(idx).CarrierID, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            Else
+
+                e.Graphics.DrawString("CST:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            End If
+            y += 18
+            e.Graphics.DrawString("Share:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(PORT_STN.site.ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("Tagid:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(comQGWrapper.EqPort(view_eq_idx).tag_id.ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+
+            e.Graphics.DrawString("IP:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(comQGWrapper.EqPort(view_eq_idx).ip.ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            ' y += 18
+            ' e.Graphics.DrawString("Location:", New Font("Microsoft JhengHei", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            ' e.Graphics.DrawString(Car(view_car_idx).get_tagId().ToString, New Font("Microsoft JhengHei", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + 60, y) 'µe•¨ºg§W¶r¶Í
+            ' e.Graphics.DrawString(Car(view_car_idx).AXIS_X.ToString, New Font("Microsoft JhengHei", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + 120, y) 'µe•¨ºg§W¶r¶Í
+            ' e.Graphics.DrawString(Car(view_car_idx).AXIS_Y.ToString, New Font("Microsoft JhengHei", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + 150, y) 'µe•¨ºg§W¶r¶Í
+            'e.Graphics.DrawString(Car(view_car_idx).AXIS_Z.ToString, New Font("Microsoft JhengHei", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + 180, y) 'µe•¨ºg§W¶r¶Í
+
+            'y += 18
+            'e.Graphics.DrawString("Cmd:", New Font("Microsoft JhengHei", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+
+            y += 20
+            'Fork HP
+
+            Dim rect As New Rectangle(x, y, 15, 15)
+            Dim iolist(8) As String
+            Dim IOdata(8) As Boolean
+            iolist(0) = "L-Req"
+            If comQGWrapper.EqPort(view_eq_idx).LoadAvail = 0 Then
+                IOdata(0) = True
+            End If
+            iolist(1) = "UL-Req"
+            If comQGWrapper.EqPort(view_eq_idx).UnLoadAvail = 0 Then
+                IOdata(1) = True
+            End If
+
+            iolist(2) = "Ready"
+            iolist(3) = "Online"
+            If comQGWrapper.EqPort(view_eq_idx).ONLINE = 1 Then
+                IOdata(3) = True
+            End If
+            iolist(4) = "TR-req"
+            iolist(5) = "Busy"
+            iolist(6) = "Comp"
+            iolist(7) = "Err"
+            If comQGWrapper.EqPort(view_eq_idx).ERR = 1 Then
+                IOdata(7) = True
+            End If
+            iolist(8) = ""
+            For i As Integer = 0 To (iolist.Length) / 3 - 1
+                y += 20
+                x = 5
+                For j As Integer = 0 To 2
+
+                    If Not iolist(i * 3 + j) = "" Then
+                        rect = New Rectangle(x, y, 15, 15)
+                        If IOdata(i * 3 + j) Then
+                            e.Graphics.FillEllipse(New SolidBrush(Color.Green), rect)
+                        End If
+                        '  e.Graphics.FillEllipse(New SolidBrush(Color.Green), rect)
+                        e.Graphics.DrawEllipse(New Pen(Color.Black, 1), rect)
+                        e.Graphics.DrawString(iolist(i * 3 + j), New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.Blue), x + 20, y) 'µe•¨ºg§W¶r¶Í
+                        x += 80
+                    End If
+
+                Next
+
+
+            Next
+        ElseIf showType = 3 Then
+            ' shelf 
+            Dim SHELF_STN As Tag_Point = New Tag_Point
+            For i As Integer = 0 To Tag_point_list.Length - 1
+                If Tag_point_list(i).TagId = comQGWrapper.ShelfData(view_shelf_idx).tag_id Then
+                    SHELF_STN = Tag_point_list(i)
+                    Exit For
+                End If
+            Next
+            e.Graphics.DrawString("Shelf info", New Font("Gill Sans MT", 12, FontStyle.Regular), New SolidBrush(Color.Green), x, y) 'µe•¨ºg§W¶r¶Í
+            y += 30
+            e.Graphics.DrawString("Shelf:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(comQGWrapper.ShelfData(view_shelf_idx).Shelf_Loc, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+
+            e.Graphics.DrawString("PortNo:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(SHELF_STN.stkval.ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+
+            e.Graphics.DrawString("Share:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(SHELF_STN.site.ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("Carrier:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+
+            e.Graphics.DrawString(comQGWrapper.ShelfData(view_shelf_idx).CarrierID, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+
+     
+
+        y += 18
+        e.Graphics.DrawString("Zone_Name:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+        e.Graphics.DrawString(comQGWrapper.ShelfData(view_shelf_idx).Zone_Name.ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+        y += 18
+        e.Graphics.DrawString("Status:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+        e.Graphics.DrawString(comQGWrapper.ShelfData(view_shelf_idx).Shelf_Status.ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+        y += 18
+        e.Graphics.DrawString("Tagid:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+        e.Graphics.DrawString(comQGWrapper.ShelfData(view_shelf_idx).tag_id.ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+        y += 18
+
+        ElseIf showType = 4 Then
+            '•RπqØ∏
+
+            ChargerClient(view_charger_idx).HoldingResponse(0) = 0
+            Dim Status As String = "Auto"
+            If ChargerClient(view_charger_idx).HoldingResponse(18) = 0 Then
+                Status = "Manual"
+            ElseIf ChargerClient(view_charger_idx).HoldingResponse(18) = 2 Then
+                Status = "ManualCharge"
+            End If
+            e.Graphics.DrawString(ChargerClient(view_charger_idx).EQ_ID.ToString, New Font("Gill Sans MT", 12, FontStyle.Regular), New SolidBrush(Color.Green), x, y) 'µe•¨ºg§W¶r¶Í
+            y += 30
+            e.Graphics.DrawString("IP:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(ChargerClient(view_charger_idx).ipadress, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("Position :", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(ChargerClient(view_charger_idx).HoldingResponse(7).ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("Temperature:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(ChargerClient(view_charger_idx).HoldingResponse(3).ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("Line Temp:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(ChargerClient(view_charger_idx).HoldingResponse(8).ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("Fork Temp:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(((ChargerClient(view_charger_idx).HoldingResponse(27) << 16) + ChargerClient(view_charger_idx).HoldingResponse(26)).ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("OUT V:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(((ChargerClient(view_charger_idx).HoldingResponse(21) << 16) + ChargerClient(view_charger_idx).HoldingResponse(20)).ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("OUT A:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(((ChargerClient(view_charger_idx).HoldingResponse(23) << 16) + ChargerClient(view_charger_idx).HoldingResponse(22)).ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("Status:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(Status, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("Error:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(ChargerClient(view_charger_idx).HoldingResponse(19).ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("Connection:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(ChargerClient(view_charger_idx).ReadOK.ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+            e.Graphics.DrawString("Tagid:", New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x, y) 'µe•¨ºg§W¶r¶Í
+            e.Graphics.DrawString(ChargerClient(view_charger_idx).tag_id.ToString, New Font("Gill Sans MT", 10, FontStyle.Regular), New SolidBrush(Color.WhiteSmoke), x + offset, y) 'µe•¨ºg§W¶r¶Í
+            y += 18
+
+
+        End If
+
+
+    End Sub
+
+    Private Sub btn_OnlineLocal_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles btn_OnlineLocal.Click
+        comQGWrapper.UpdateSV(GEM_CONTROL_STATE, GEM.OnlineLoaclval)
+    End Sub
+
+    Private Sub btn_Offline_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles btn_Offline.Click
+        comQGWrapper.UpdateSV(GEM_CONTROL_STATE, GEM.OfflineEQval)
+    End Sub
+
+    Private Sub btn_OnLine_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles btn_OnLine.Click
+
+    End Sub
+
+    Private Sub Button4_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles pic_close.Click
+        agv_info.Hide()
+        pic_close.Hide()
+        txtCar.Hide()
+        From_cb.Hide()
+
+        To_cb.Hide()
+        rolldateTxt.Hide()
+
+        SendBtn.Hide()
+
+    End Sub
+
+  
+    'Function path_check(ByVal cmd1 As String, ByVal cmd2 As String)
+
+    '    Dim point1() As String = cmd1.Split(",")
+    '    Dim point2() As String = cmd2.Split(",")
+    '    Dim idx1(point1.Length - 1) As Integer
+    '    Dim idx2(point2.Length - 1) As Integer
+    '    Dim ii As Integer = 0
+    '    Dim jj As Integer = 0
+
+    '    For j As Integer = 0 To idx1.Length - 1
+
+    '        For i As Integer = 0 To Tag_point_list.Length - 1
+    '            If CInt(point1(j)) = Tag_point_list(i).TagId Then
+    '                idx1(ii) = i
+    '                ii += 1
+    '            End If
+    '        Next
+    '    Next
+    '    For j As Integer = 0 To idx2.Length - 1
+    '        For i As Integer = 0 To Tag_point_list.Length - 1
+    '            If CInt(point2(j)) = Tag_point_list(i).TagId Then
+    '                idx2(jj) = i
+    '                jj += 1
+    '            End If
+    '        Next
+    '    Next
+    '    Dim minX1, maxX1, minY1, maxY1 As Integer
+    '    Dim minX2, maxX2, minY2, maxY2 As Integer
+    '    Dim len As Integer = point1.Length
+
+    '    For i As Integer = 0 To idx1.Length - 1
+    '        For j As Integer = 0 To idx2.Length - 1
+    '            If Tag_point_list(idx1(i)).th = 0 Or Tag_point_list(idx1(i)).th = 180 Then
+    '                minX1 = Tag_point_list(idx1(i)).X - Car(0).width / 2
+    '                maxX1 = Tag_point_list(idx1(i)).X + Car(0).width / 2
+    '                minY1 = Tag_point_list(idx1(i)).Y - Car(0).height / 2
+    '                maxY1 = Tag_point_list(idx1(i)).Y + Car(0).height / 2
+    '            ElseIf Tag_point_list(idx1(i)).th = 90 Or Tag_point_list(idx1(i)).th = -90 Then
+    '                minX1 = Tag_point_list(idx1(i)).X - Car(0).height / 2
+    '                maxX1 = Tag_point_list(idx1(i)).X + Car(0).height / 2
+    '                minY1 = Tag_point_list(idx1(i)).Y - Car(0).width / 2
+    '                maxY1 = Tag_point_list(idx1(i)).Y + Car(0).width / 2
+    '            End If
+    '            If Tag_point_list(idx2(j)).th = 0 Or Tag_point_list(idx2(j)).th = 180 Then
+    '                minX2 = Tag_point_list(idx2(j)).X - Car(0).width / 2
+    '                maxX2 = Tag_point_list(idx2(j)).X + Car(0).width / 2
+    '                minY2 = Tag_point_list(idx2(j)).Y - Car(0).height / 2
+    '                maxY2 = Tag_point_list(idx2(j)).Y + Car(0).height / 2
+    '            ElseIf Tag_point_list(idx2(j)).th = 90 Or Tag_point_list(idx2(j)).th = -90 Then
+    '                minX2 = Tag_point_list(idx2(j)).X - Car(0).height / 2
+    '                maxX2 = Tag_point_list(idx2(j)).X + Car(0).height / 2
+    '                minY2 = Tag_point_list(idx2(j)).Y - Car(0).width / 2
+    '                maxY2 = Tag_point_list(idx2(j)).Y + Car(0).width / 2
+    '            End If
+
+
+    '            If (maxX1 > minX2 And maxX2 > minX1 And maxY1 > minY2 And maxY2 > minY1) Then
+
+    '                len = i
+    '                Exit For
+
+    '            End If
+    '        Next
+    '        If Not len = point1.Length Then
+    '            Exit For
+    '        End If
+    '    Next
+
+    '    Return String.Join(",", point1, 0, len)
+
+
+    'End Function
+
+
+
+    Private Sub From_cb_TextChanged(ByVal sender As Object, ByVal e As System.EventArgs) Handles From_cb.TextChanged
+        If IsNumeric(From_cb.Text) Then
+            If CInt(From_cb.Text) >= 10 Then
+                For i As Integer = 0 To Tag_point_list.Length - 1
+                    If Tag_point_list(i).TagId.ToString = From_cb.Text Then
+                        Dim idx As Integer = -1
+                        idx = comQGWrapper.CST_SearchByLoc(Tag_point_list(i).LOC)
+                        If idx > -1 Then
+                            rolldateTxt.Text = comQGWrapper.CST(idx).CarrierID
+                        End If
+                        Exit Sub
+                    End If
+                Next
+
+                'MsgBox("ß‰§£®ÏCST")
+
+            End If
+        End If
+
+    End Sub
+
+ 
+    Private Sub From_cb_SelectedIndexChanged(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles From_cb.SelectedIndexChanged
+
+    End Sub
+
+ 
+    Function Search_EMPTY_Shelf(ByVal FromTagid As Integer, Optional ByVal DEST As String = "", Optional ByVal blockpoint As String = "", Optional ByVal blockPath As String = "") As Integer
+        Dim destlist As String = ""
+        Dim cnt As Integer = 0
+
+        Dim cmdto_list(ListView1.Items.Count - 1) As String
+        For i As Integer = 0 To ListView1.Items.Count - 1
+            cmdto_list(i) = ListView1.Items(i).SubItems(3).Text
+        Next
+        For j As Integer = 0 To comQGWrapper.ShelfData.Length - 1
+                  '™≈¥◊¶Ï ,¨£∞e©R•OÆ… ßÛ∑s
+            If comQGWrapper.ShelfData(j).CarrierID = "" And (In_String(DEST, comQGWrapper.ShelfData(j).Zone_Name) Or DEST = "") And comQGWrapper.ShelfData(j).Shelf_Status = "" And Not comQGWrapper.ShelfData(j).tag_id = FromTagid Then
+                '¨ˆø˝©“¶≥™≈¥◊¶Ï
+                If Array.IndexOf(cmdto_list, comQGWrapper.ShelfData(j).tag_id.ToString) = -1 Then
+                    If cnt = 0 Then
+                        destlist += comQGWrapper.ShelfData(j).tag_id.ToString
+                    Else
+                        destlist += "," + comQGWrapper.ShelfData(j).tag_id.ToString
+                    End If
+                    cnt += 1
+                End If
+            End If
+        Next
+        Dim cmd As String = Dijkstra_fn_ary(Dijkstra_list(0).ary, Tag_ID_List, FromTagid, destlist, blockpoint, blockPath)
+        Try
+            If Not cmd = "" Then
+                'setCommtext("πw≠p∏ÙÆ|:" + FromTagid.ToString + "->" + destlist + ">>" + cmd)
+                Dim smdlist() As String = cmd.Split(",")
+                'Return CInt(smdlist(smdlist.Length - 1))
+                Search_EMPTY_Shelf = Tag_point_list(Tag_Point_ByTagid(Tag_point_list, CInt(smdlist(smdlist.Length - 1)))).TagId  '¶^∂«•ÿ™∫¶a
+            Else
+                Search_EMPTY_Shelf = -1
+                '  setCommtext("from " + FromTagid.ToString + " to" + destlist + "ß‰§£®Ï≤≈¶X™∫")
+            End If
+        Catch ex As Exception
+            Search_EMPTY_Shelf = -1
+            'setCommtext("from " + FromTagid.ToString + " to" + destlist + "ß‰§£®Ï≤≈¶X™∫")
+        End Try
+
+    End Function
+
+    'Function Search_EMPTY_Shelf(ByVal frompoint As Integer)
+    '    Dim destlist As String = ""
+    '    Dim cnt As Integer = 0
+    '    TextBox10.Text = ""
+
+    '    For i As Integer = 0 To comQGWrapper.ShelfData.Length - 1
+    '        TextBox10.Text += comQGWrapper.ShelfData(i).tag_id.ToString + "," + comQGWrapper.ShelfData(i).Shelf_Loc + "," + comQGWrapper.ShelfData(i).CarrierID + "," + comQGWrapper.ShelfData(i).Shelf_Status + vbCrLf
+    '        If comQGWrapper.ShelfData(i).CarrierID = "" And comQGWrapper.ShelfData(i).Shelf_Status = "" And Not comQGWrapper.ShelfData(i).tag_id = frompoint Then
+    '            If cnt = 0 Then
+    '                destlist += comQGWrapper.ShelfData(i).tag_id.ToString
+    '            Else
+    '                destlist += "," + comQGWrapper.ShelfData(i).tag_id.ToString
+    '            End If
+    '            cnt += 1
+    '        End If
+    '    Next
+    '    Dim cmd As String = Dijkstra_fn_ary(Dijkstra_list(0).ary, Tag_ID_List, frompoint, destlist, "")
+    '    If Not cmd = "" Then
+    '        Dim smdlist() As String = cmd.Split(",")
+    '        Return CInt(smdlist(smdlist.Length - 1))
+    '    End If
+    '    Return -1
+    'End Function
+
+   
+    Function Serach_Shelf_ByTagId(ByVal Tagid As Integer) As Integer
+        Serach_Shelf_ByTagId = -1
+        For i As Integer = 0 To comQGWrapper.ShelfData.Length - 1
+            If comQGWrapper.ShelfData(i).tag_id = Tagid Then
+                Serach_Shelf_ByTagId = i
+
+            End If
+        Next
+
+    End Function
+
+    Sub Del_CMD(ByVal carno As Integer)
+        Dim oConn As MySqlConnection
+        Dim sqlCommand As New MySqlCommand
+        oConn = New MySqlConnection(Mysql_str)
+        oConn.Open()
+        sqlCommand.Connection = oConn
+        Dim Query As String = "delete from agv_cmd_list where `AGVNo`=" + carno.ToString + " and CmdFrom=4"
+        sqlCommand.CommandText = Query
+        sqlCommand.ExecuteNonQuery()
+        oConn.Close()
+        oConn.Dispose()
+    End Sub
+
+
+  
+
+    Private Sub AGVIO1_03_Click(sender As System.Object, e As System.EventArgs) Handles AGVIO1_02.Click
+
+    End Sub
+
+    Private Sub Label113_Click(sender As System.Object, e As System.EventArgs) Handles AGVIO1_06.Click
+
+    End Sub
+
+    Private Sub Label107_Click(sender As System.Object, e As System.EventArgs) Handles AGVIO1_13.Click
+
+    End Sub
+
+    Private Sub Button16_Click_4(sender As System.Object, e As System.EventArgs) Handles Button16.Click
+
+        If showType = 1 Then
+            Update_SQL("update `point` set `X`=" + Car(view_car_idx).AXIS_X.ToString + ",`Y`=" + Car(view_car_idx).AXIS_Y.ToString + ",th=" + Car(view_car_idx).AXIS_Z.ToString + " where tag_id=" + Car(view_car_idx).get_tagId().ToString)
+            For i As Integer = 0 To Tag_point_list.Length - 1
+                If Tag_point_list(i).TagId = Car(view_car_idx).get_tagId() Then
+                    Tag_point_list(i).X = Car(view_car_idx).AXIS_X
+                    Tag_point_list(i).Y = Car(view_car_idx).AXIS_Y
+                    Tag_point_list(i).th = Car(view_car_idx).AXIS_Z
+
+                End If
+            Next
+        ElseIf showType = 2 Then
+            'eq
+            'comQGWrapper.EqPort(view_eq_idx)
+
+        ElseIf showType = 3 Then
+            'shelf
+            If Button16.Text = "Lock" Then
+                Dim cst_idx As Integer
+
+                comQGWrapper.ShelfData(view_shelf_idx).Shelf_Status = "X"
+                cst_idx = comQGWrapper.CST_SearchByLoc(comQGWrapper.ShelfData(view_shelf_idx).Shelf_Loc)
+                If cst_idx > -1 Then
+                    comQGWrapper.CST(cst_idx).CarrierState = GEM.CS_BLOCKED
+                End If
+
+
+                Update_SQL("update `shelf` set Shelf_Status='X' where tag_id=" + comQGWrapper.ShelfData(view_shelf_idx).tag_id.ToString)
+                Button16.Text = "Unlock"
+            Else
+                Dim cst_idx As Integer
+                comQGWrapper.ShelfData(view_shelf_idx).Shelf_Status = ""
+                Update_SQL("update `shelf` set Shelf_Status='' where tag_id=" + comQGWrapper.ShelfData(view_shelf_idx).tag_id.ToString)
+                Button16.Text = "Lock"
+                cst_idx = comQGWrapper.CST_SearchByLoc(comQGWrapper.ShelfData(view_shelf_idx).Shelf_Loc)
+                If cst_idx > -1 Then
+                    comQGWrapper.CST(cst_idx).CarrierState = GEM.CS_STOREDCOMPLETED
+                End If
+
+            End If
+        ElseIf showType = 4 Then
+            '∂}√ˆ
+            '1.≠´±“¥ºØ‡•Rπqæπ
+            '2.ª∑∫›RESET
+            Dim val(1) As Integer
+            val(0) = 2
+            ChargerClient(view_charger_idx).Write_HoldingReg(1170, 1, val)
+
+        End If
+
+    End Sub
+    Function Update_SQL(ByVal Query As String)
+        Dim oConn As MySqlConnection
+        Dim sqlCommand As New MySqlCommand
+        oConn = New MySqlConnection(Mysql_str)
+        oConn.Open()
+        sqlCommand.Connection = oConn
+        sqlCommand.CommandText = Query
+        Try
+            Update_SQL = sqlCommand.ExecuteNonQuery()
+        Catch ex As Exception
+            Update_SQL = 0
+        End Try
+
+        oConn.Close()
+        oConn.Dispose()
+
+    End Function
+    Private Sub PictureBox1_MouseWheel(sender As Object, e As System.Windows.Forms.MouseEventArgs) Handles PictureBox1.MouseWheel
+        If e.Delta > 0 Then
+            AGVratio += 0.002
+            ratio.Text = AGVratio.ToString
+            'MsgBox(AGVratio)
+        Else
+
+            AGVratio -= 0.002
+            ratio.Text = AGVratio.ToString
+            'MsgBox(AGVratio)
+        End If
+        Me.PictureBox1.Invalidate()
+    End Sub
+
+   
+    Private Sub TransferToolStripMenuItem_Click(sender As System.Object, e As System.EventArgs) Handles TransferToolStripMenuItem.Click
+        transfer.Mysql_str = Mysql_str
+
+        transfer.Show()
+
+    End Sub
+   
+  
+  
+
+    Private Sub TabPage1_Click(sender As System.Object, e As System.EventArgs) Handles TabPage1.Click
+
+    End Sub
+    Dim debug_subcmd As Boolean = False
+    Private Sub Button14_Click_1(ByVal sender As System.Object, ByVal e As System.EventArgs)
+
+
+
+    End Sub
+
+    'Private Sub Button20_Click_1(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button20.Click
+    '    If a.tcp_client Is Nothing Then
+    '        a.init("192.168.8.70", 502, 1100)
+    '    Else
+    '        If a.tcp_client.Connected = False Then
+    '            a.init("192.168.8.70", 502, 1100)
+    '        End If
+    '    End If
+    'End Sub
+    'Private Sub Button28_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button28.Click
+
+    '    setCommtext(int2str(a.Response, 0, 59))
+
+
+    'End Sub
+    Private Sub Button24_Click_1(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button24.Click
+        Dim idx As Integer = -1
+        idx = comQGWrapper.CST_SearchByCSTID(CSTList.Text)
+        If idx > -1 And Not ToLocList.Text = "" Then
+
+            comQGWrapper.CST(idx).CommandID = comQGWrapper.gettime
+            comQGWrapper.CST(idx).DEST = ToLocList.Text
+            comQGWrapper.CST(idx).PRIORITY = 50
+            comQGWrapper.CST(idx).TransferState = 1
+        End If
+
+    End Sub
+
+
+    Private Sub Button29_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
+
+    End Sub
+
+    Private Sub CarrierToolStripMenuItem_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles CarrierToolStripMenuItem.Click
+
+
+        Carrier.Show()
+    End Sub
+
+    Private Sub Button20_Click_1(ByVal sender As System.Object, ByVal e As System.EventArgs)
+        MsgBox(Search_EMPTY_Shelf(4003, "", AllBlockPoint + "," + Car(0).Block_Point))
+    End Sub
+
+    Private Sub Button30_Click_1(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button30.Click
+        If IsNumeric(AGV_SetNo.Text) Then
+            Dim flag As Boolean = False
+            For i As Integer = 0 To Car.Length - 1
+                If CInt(AGV_SetNo.Text) = Car(i).device_no Then
+                    Car(i).Recharge_volt = CInt(Recharge_volt.Text)
+                    Car(i).Recharge_SOC = CInt(Recharge_SOC.Text)
+                    Car(i).Recharge_Point_list = Recharge_Point.Text
+                    Car(i).wait_point = CInt(wait_point.Text)
+                    Car(i).Block_Point = block_point.Text
+                    Car(i).Block_Path = block_Path.Text
+                    Car(i).width = CInt(setwidth.Text)
+                    Car(i).height = CInt(Setheight.Text)
+                    Car(i).ReverseXY = CInt(ReverseXY.Text)
+                    Car(i).offset_X = CInt(SetOffset_X.Text)
+                    Car(i).offset_Y = CInt(SetOffset_Y.Text)
+                    Car(i).MaxPath = CInt(MaxPath.Text)
+                    Car(i).RePath = CInt(RePath.Text)
+                    Car(i).RetreatPath = CInt(RetreatPath.Text)
+                    Car(i).Site = SiteTxt.Text
+                    Dim Query As String = "update agv_list set Recharge_volt=" + Recharge_volt.Text + ",Recharge_SOC=" + Recharge_SOC.Text + ",Recharge_Point='" + Recharge_Point.Text + "',wait_point=" + wait_point.Text + _
+                        ",block_point='" + block_point.Text + "',block_Path='" + block_Path.Text + "',car_site='" + SiteTxt.Text + "',width=" + Setwidth.Text + ",height=" + Setheight.Text + ",ReverseXY=" + ReverseXY.Text + _
+                        ",offset_X=" + SetOffset_X.Text + ",offset_Y=" + SetOffset_Y.Text + ",MaxPath=" + MaxPath.Text + ",RePath=" + RePath.Text + ",RetreatPath=" + RetreatPath.Text + _
+                        " where AGVNo=" + Car(i).device_no.ToString
+                    MsgBox("ßÛ∑s¶^≥¯:" + Update_SQL(Query).ToString)
+
+                    flag = True
+                End If
+            Next
+            If flag = False Then
+                MsgBox("ß‰§£®Ï®ÆΩ¯")
+            End If
+        Else
+            MsgBox("AGV Noø˘ª~")
+        End If
+
+
+    End Sub
+
+    Private Sub AGV_SetNo_SelectedIndexChanged(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles AGV_SetNo.SelectedIndexChanged
+        For i As Integer = 0 To Car.Length - 1
+            If CInt(AGV_SetNo.Text) = Car(i).device_no Then
+                Recharge_volt.Text = Car(i).Recharge_volt.ToString
+                Recharge_SOC.Text = Car(i).Recharge_SOC.ToString
+                Recharge_Point.Text = Car(i).Recharge_Point_list
+                wait_point.Text = Car(i).wait_point.ToString
+                block_point.Text = Car(i).Block_Point.ToString
+                Setwidth.Text = Car(i).width.ToString
+                Setheight.Text = Car(i).height.ToString
+                ReverseXY.Text = Car(i).ReverseXY.ToString
+                SetOffset_X.Text = Car(i).offset_X.ToString
+                SetOffset_Y.Text = Car(i).offset_Y.ToString
+                MaxPath.Text = Car(i).MaxPath.ToString
+                RetreatPath.Text = Car(i).RetreatPath.ToString
+                RePath.Text = Car(i).RePath.ToString
+                block_Path.Text = Car(i).Block_Path.ToString
+                SiteTxt.Text = Car(i).Site.ToString
+            End If
+        Next
+
+    End Sub
+
+    Private Sub ShelfToolStripMenuItem_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
+        shelfForm.Show()
+    End Sub
+
+    Private Sub Button28_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
+
+
+    End Sub
+    Dim int_x As Integer = 0
+    Dim int_y As Integer = 0
+    Dim move_flag As Boolean = False
+    Dim map_offset_X As Integer = 0
+    Dim map_offset_Y As Integer = 0
+    Private Sub PictureBox1_MouseDown(ByVal sender As Object, ByVal e As System.Windows.Forms.MouseEventArgs) Handles PictureBox1.MouseDown
+        If e.Button = Windows.Forms.MouseButtons.Left Then
+            int_x = e.X
+            int_y = e.Y
+            move_flag = True
+        End If
+    End Sub
+
+    Private Sub PictureBox1_MouseUp(ByVal sender As Object, ByVal e As System.Windows.Forms.MouseEventArgs) Handles PictureBox1.MouseUp
+        move_flag = False
+    End Sub
+
+
+
+    Private Sub PictureBox1_MouseMove(ByVal sender As Object, ByVal e As System.Windows.Forms.MouseEventArgs) Handles PictureBox1.MouseMove
+        If move_flag Then
+            map_offset_X -= CInt(e.X - int_x)
+            map_offset_Y -= CInt(e.Y - int_y)
+            MapX.Text = map_offset_X
+            MapY.Text = map_offset_Y
+            int_x = e.X
+            int_y = e.Y
+            '  settext(CInt(e.X - int_x).ToString + " " + map_offset_X.ToString)
+            Me.PictureBox1.Invalidate()
+        End If
+
+    End Sub
+
+    Private Sub PictureBox1_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles PictureBox1.Click
+
+    End Sub
+
+    Private Sub Button35_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button35.Click
+
+    End Sub
+
+    Private Sub DeleteToolStripMenuItem_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles DeleteToolStripMenuItem.Click
+        If Me.ListView2.SelectedItems.Count = 1 Then
+            ' MsgBox(Me.ListView1.SelectedItems(0).SubItems(0).Text)
+
+
+            Dim idx As Integer = -1
+            idx = comQGWrapper.CST_SearchByCSTID(Me.ListView2.SelectedItems(0).Text)
+            If (idx > -1) Then
+                Dim Query As String = "Delete from mcs_cmd_list where  CARRIERID='" + comQGWrapper.CST(idx).CarrierID + "' or REQUEST_TIME < '" + Now.AddDays(-1).ToString("yyyy-MM-dd HH:mm:ss") + "'"
+                Update_SQL(Query)
+                Query = "update mcs_cmd_history  set End_time=now() where  COMMANDID='" + comQGWrapper.CST(idx).CommandID + "'"
+                Update_SQL(Query)
+
+                comQGWrapper.CST(idx).DEST = ""
+                comQGWrapper.CST(idx).PRIORITY = 0
+                comQGWrapper.CST(idx).mcstime = 0
+                comQGWrapper.CST(idx).CommandID = ""
+                comQGWrapper.CST(idx).CarrierState = GEM.CS_STOREDCOMPLETED
+                comQGWrapper.EventReportSendOb(GEM.EVENT_TransferAbortInitiated, comQGWrapper.CST(idx))
+                comQGWrapper.EventReportSendOb(GEM.EVENT_TransferAbortCompleted, comQGWrapper.CST(idx))
+            End If
+            For i As Integer = ListView2.SelectedIndices.Count - 1 To 0 Step -1
+                ListView2.Items.RemoveAt(ListView2.SelectedIndices(i))
+            Next
+        Else
+            MsgBox("Ω–•˝øÔæ‹©R•O")
+        End If
+    End Sub
+
+    Private Sub Button29_Click_1(ByVal sender As System.Object, ByVal e As System.EventArgs)
+        Del_CMD(3)
+    End Sub
+    Private Sub Button40_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
+        MsgBox(Check_Path("3003,4003", "1", 260, 75, Tag_point_list, 5120 - 99999, 99999 + 70, 0))
+    End Sub
+
+    Private Sub AddpwtToolStripMenuItem_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles AddpwtToolStripMenuItem.Click
+        If Me.ListView2.SelectedItems.Count = 1 Then
+            ' MsgBox(Me.ListView1.SelectedItems(0).SubItems(0).Text)
+
+
+            Dim idx As Integer = -1
+            idx = comQGWrapper.CST_SearchByCSTID(Me.ListView2.SelectedItems(0).Text)
+            If (idx > -1) Then
+                comQGWrapper.CST(idx).mcstime -= 10000
+            End If
+
+        Else
+            MsgBox("Ω–•˝øÔæ‹©R•O")
+        End If
+    End Sub
+    Function GetCarPoint(ByVal tagid As Integer, ByVal PointTh As Integer, ByVal width As Integer, ByVal height As Integer) As String
+        GetCarPoint = "1"
+        Dim idx As Integer = -1
+        For i As Integer = 0 To Tag_point_list.Length - 1
+            If Tag_point_list(i).TagId = tagid Then
+                idx = i
+            End If
+        Next
+        If idx > -1 Then
+
+
+            Dim X(3) As Integer
+            Dim Y(3) As Integer
+            Dim PointX As Integer = Tag_point_list(idx).X
+            Dim PointY As Integer = Tag_point_list(idx).Y
+            X(0) = (width / 2) * Math.Cos(PointTh * Math.PI / 180) + (height / 2) * Math.Sin(PointTh * Math.PI / 180) + PointX
+            Y(0) = -(width / 2) * Math.Sin(PointTh * Math.PI / 180) + (height / 2) * Math.Cos(PointTh * Math.PI / 180) + PointY
+            X(1) = (width / 2) * Math.Cos(PointTh * Math.PI / 180) + (-height / 2) * Math.Sin(PointTh * Math.PI / 180) + PointX
+            Y(1) = -(width / 2) * Math.Sin(PointTh * Math.PI / 180) + (-height / 2) * Math.Cos(PointTh * Math.PI / 180) + PointY
+            X(3) = (-width / 2) * Math.Cos(PointTh * Math.PI / 180) + (height / 2) * Math.Sin(PointTh * Math.PI / 180) + PointX
+            Y(3) = -(-width / 2) * Math.Sin(PointTh * Math.PI / 180) + (height / 2) * Math.Cos(PointTh * Math.PI / 180) + PointY
+            X(2) = (-width / 2) * Math.Cos(PointTh * Math.PI / 180) + (-height / 2) * Math.Sin(PointTh * Math.PI / 180) + PointX
+            Y(2) = -(-width / 2) * Math.Sin(PointTh * Math.PI / 180) + (-height / 2) * Math.Cos(PointTh * Math.PI / 180) + PointY
+            Dim minX, maxX, minY, maxY As Integer
+            Array.Sort(X)
+            Array.Sort(Y)
+            minX = X(0)
+            maxX = X(3)
+            minY = Y(0)
+            maxY = Y(3)
+            Dim list(Tag_point_list.Length) As Integer
+            For i As Integer = 0 To Tag_point_list.Length - 1
+                If Tag_point_list(i).X >= minX And Tag_point_list(i).X <= maxX And Tag_point_list(i).Y >= minY And Tag_point_list(i).Y <= maxY Then
+                    GetCarPoint += "," + Tag_point_list(i).TagId.ToString
+                End If
+            Next
+        End If
+    End Function
+    Function BitCheck(ByVal val As Integer, ByVal offset As Integer) As Boolean
+        BitCheck = False
+        If (val >> offset) Mod 2 = 1 Then
+            BitCheck = True
+        End If
+    End Function
+
+    Function TagID_Dis(ByVal StartPoint As Integer, ByVal Loc As String, Optional ByVal cartyno As Integer = 3) As Long
+        TagID_Dis = 100000
+        Dim S_idx As Integer = -1
+        Dim E_idx As Integer = -1
+
+        If StartPoint > 0 And Not Loc = "" Then
+
+
+            For i As Integer = 0 To Tag_point_list.Length - 1
+                If StartPoint = Tag_point_list(i).TagId Then
+                    S_idx = i
+                    Exit For
+                End If
+
+            Next
+            For i As Integer = 0 To Tag_point_list.Length - 1
+                If Loc = Tag_point_list(i).LOC Then
+                    E_idx = i
+                    Exit For
+                End If
+            Next
+            If S_idx > -1 And E_idx > -1 Then
+                If cartyno > 2 Then
+                    TagID_Dis = distance(Tag_point_list(S_idx).X, Tag_point_list(E_idx).X, Tag_point_list(S_idx).Y, Tag_point_list(E_idx).Y) * 10
+                Else
+                    TagID_Dis = Math.Abs(Tag_point_list(S_idx).TagId - Tag_point_list(E_idx).TagId) * 1000
+                End If
+
+            End If
+
+        End If
+
+
+    End Function
+    Function distance(ByVal X1 As Long, ByVal X2 As Long, ByVal Y1 As Long, ByVal Y2 As Long) As Long
+        Return Sqrt(Abs(X1 - X2) ^ 2 + Abs(Y1 - Y2) ^ 2)
+    End Function
+    Function short_path(ByVal maincmd As String, ByVal fastcmd As String, Optional ByVal maxlen As Integer = 15) As String
+        short_path = ""
+
+        Dim main() As String = maincmd.Split(",")
+        Dim fast() As String = fastcmd.Split(",")
+        Dim startidx As Integer = 0
+        startidx = Math.Max(main.Length, fast.Length)
+        For i As Integer = 0 To Math.Min(main.Length - 1, fast.Length - 1)
+            If Not main(i) = fast(i) Then
+                startidx = i
+                Exit For
+            End If
+        Next
+        If main(main.Length - 1) = fast(fast.Length - 1) Then
+            '¶‹§÷≤◊¬I§@≠P
+
+            For i As Integer = fast.Length - 1 To 0 Step -1
+                If i >= maxlen Then
+                    i = maxlen - 1
+                End If
+                For j As Integer = startidx To main.Length - 1
+                    If fast(i) = main(j) Then
+                        '¨€¶P
+                        ' If Not i = j Then
+                        Return String.Join(",", fast, 0, i + 1)
+                        ' End If
+
+                    End If
+                Next
+            Next
+        End If
     End Function
     Function int2bytestr(ByVal val() As Integer, ByVal startidx As Integer, ByVal len As Integer) As String
         int2bytestr = ""
@@ -6168,150 +10426,198 @@ Public Class Form1
         int2bytestr = System.Text.Encoding.UTF8.GetString(strbyte, 0, len)
         int2bytestr = int2bytestr.TrimEnd("")
     End Function
+  
+    Private Sub Button4_Click_2(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button4.Click
+        If showType = 4 Then
+            '∂}√ˆ
+            '1.≠´±“¥ºØ‡•Rπqæπ
+            '2.ª∑∫›RESET
+            Dim val(1) As Integer
+            val(0) = 1
+            ChargerClient(view_charger_idx).Write_HoldingReg(1170, 1, val)
+        Else
+            MsgBox("Ω–øÔæ‹•RπqØ∏!!")
+        End If
 
- 
-    Private Sub Button4_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button4.Click
-        Dim oConn As MySqlConnection
-        Dim sqlCommand As New MySqlCommand
-        Dim i As Integer = 0
-        Dim tagid_len As Integer = 0
-        oConn = New MySqlConnection(Mysql_str)
-        Dim Query As String = "SELECT Tag_ID,X,Y,Retreat_Flag,Tag_name,floor,floor_no,th,slam FROM `point` where Tag_ID between 0 and 19999  order by Tag_ID ASC"
-        Dim mReader As MySqlDataReader
-        oConn.Open()
-        sqlCommand.Connection = oConn
-        sqlCommand.CommandText = Query
-        mReader = sqlCommand.ExecuteReader()
-        i = 0
-        ReDim Tag_ID_Fork_List(10000)
-        ReDim Tag_point_list(10000)
-        ReDim Tag_ID_List(10000)
-        Tag_point_Dictionary.Clear()
-
-
-        While (mReader.Read)
-            Tag_ID_List(i) = CInt(mReader.Item(0))
-            Tag_point_list(i).TagId = CInt(mReader.Item(0))
-            Tag_point_list(i).X = CInt(mReader.Item(1))
-            Tag_point_list(i).Y = CInt(mReader.Item(2))
-            Tag_point_list(i).th = CInt(mReader.Item(7))
-            Tag_point_list(i).Retreat_Flag = CInt(mReader.Item(3))
-            Tag_point_list(i).name = mReader.Item(4).ToString
-            Tag_point_list(i).floor = mReader.Item(5).ToString
-            Tag_point_list(i).floor_no = CInt(mReader.Item(6))
-            Tag_point_list(i).slam = CInt(mReader.Item(8))
-            Tag_point_Dictionary.Add(Tag_point_list(i).TagId, Tag_point_list(i))
-            i += 1
-            tagid_len = i
-        End While
-        mReader.Close()
-        Array.Resize(Tag_point_list, tagid_len)
-
-        'ËºâÂÖ•‰∏çÂΩ±ÈüøË®≠ÂÆöËªäÈ´î
-        Query = "SELECT AGVNo,Position,Loading,owner,Car_type,Chrage_Point,block_point,wait_point,Chrage_volt,SafeSensor,Compass,AutoCharge,AutoChargeVal,car_site,Recharge_SOC,Recharge_Point,lock_user FROM `agv_list` where flag=1 order by AGVNo"
-        sqlCommand.CommandText = Query
-        mReader = sqlCommand.ExecuteReader()
-        While (mReader.Read)
-            Try
-                For j As Integer = 0 To Car.Length - 1
-                    If Car(j).device_no = CInt(mReader.Item(0)) Then
-                        Car(j).Car_type = mReader.Item(4).ToString
-                        Car(j).Chrage_Point = CInt(mReader.Item(5))
-                        Car(j).wait_point = CInt(mReader.Item(7))
-                        Car(j).Chrage_volt = CInt(mReader.Item(8)) '
-                        Car(i).Block_Point = mReader.Item(6).ToString
-                        Car(i).SafeSensor = CInt(mReader.Item(9))
-                        Car(i).Compass = CInt(mReader.Item(10))
-                        Car(i).AutoCharge = CInt(mReader.Item(11))
-                        Car(i).AutoChargeVal = CInt(mReader.Item(12))
-                        Car(i).Site = (mReader.Item(13)).ToString
-                        Car(i).Recharge_SOC = CInt(mReader.Item(14))
-                        Car(i).Recharge_Point = (mReader.Item(15)).ToString
-                        Car(i).Lock_user = (mReader.Item(16)).ToString
-                        Exit For
-                    End If
-                Next
-            Catch ex As Exception
-                MsgBox(Car(i).device_no.ToString + "Ë®≠ÂÆöÈåØË™§")
-            End Try
-        End While
-
-        mReader.Close()
-
-
-        For j As Integer = 0 To tagid_len - 1
-            Tag_ID_Fork_List(j) = Tag_ID_List(j)
-            Tag_ID_Fork_List(j + tagid_len) = Tag_ID_List(j) + 10000
-        Next
-        Array.Resize(Tag_ID_Fork_List, tagid_len * 2)
-        Array.Resize(Tag_ID_List, tagid_len)
-        Path_base_Dictionary.Clear()
-        Load_Path_base()
-        Path_fork_Dictionary.Clear()
-        Load_Path_fork_base()
-        For k As Integer = 0 To Dijkstra_list.Length - 1
-            If Dijkstra_list(k).CarType = "9" Then
-                'FORK
-                Load_Path_fork(Dijkstra_list(k).name, Tag_ID_Fork_List, Dijkstra_list(k).ary) 'ËºâÂÖ•Ë∑ØÂæëË≥áÊñô
-            Else
-                Load_Path(Dijkstra_list(k).name, Tag_ID_List, Dijkstra_list(k).ary) 'ËºâÂÖ•Ë∑ØÂæëË≥áÊñô
-            End If
-            car_type.Items.Add(Dijkstra_list(k).name)
-        Next
-        For i = 0 To Car.Length - 1
-
-            Car(i).Tag_Point_dict = Tag_point_Dictionary ' New Dictionary(Of Integer, Tag_Point)(myDictionary)
-        Next
-
-        MsgBox("Êõ¥Êñ∞ÂÆåÁï¢")
     End Sub
 
     Private Sub Button5_Click_1(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button5.Click
-        If Car(view_car_idx).Car_type = "SLAM" Then
-            Car(view_car_idx).To_AGV(4) = CInt(To_cb.Text)
-            Car(view_car_idx).To_AGV(5) = Query_Floor(CInt(To_cb.Text))
+        If testval = 0 Then
+            testval = 2
+
+        Else
+            testval = 0
         End If
-
-
-
     End Sub
-  
-    Private Sub Button10_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button10.Click
-        Car(view_car_idx).To_AGV(3) = CInt(To_cb.Text)
-    End Sub
-    Dim BackString As String = ""
-    Private Sub BackUp_DoWork(ByVal sender As System.Object, ByVal e As System.ComponentModel.DoWorkEventArgs) Handles BackUp.DoWork
 
-        Dim idx As Integer = view_car_idx
-        If Car(view_car_idx).Car_type = "SLAM" Then
-            For i As Integer = 0 To Tag_point_list.Length - 1
-                'ÈÄêÂÄãË©¢Âïè
-                BackString = Tag_point_list(i).floor_no.ToString + ":" + Tag_point_list(i).TagId.ToString + "(" + Round(i / Tag_point_list.Length, 1).ToString + "%)"
-                'If Tag_point_list(i).floor_no = 5 And (Tag_point_list(i).TagId = 1397 Or Tag_point_list(i).TagId = 1398 Or Tag_point_list(i).TagId = 1399) Then
-                Car(idx).To_AGV(4) = Tag_point_list(i).TagId
-                Car(idx).To_AGV(5) = Tag_point_list(i).floor_no
+    Private Sub BG_Update_DoWork(ByVal sender As System.Object, ByVal e As System.ComponentModel.DoWorkEventArgs) Handles BG_Update.DoWork
+        Dim oConn As MySqlConnection
+        Dim sqlCommand As New MySqlCommand
+        oConn = New MySqlConnection(Mysql_str)
+        'Dim Query As String = "SELECT CmdKey,AGVno,CmdFrom,CmdTo,Pri_Wt,CMD_Status,RequestTime,Requestor FROM `agv_cmd_list` where 1 order by Pri_Wt DESC "
+        Dim i As Integer = 0
+        Dim Query As String = ""
+        oConn.Open()
+        sqlCommand.Connection = oConn
+        Try
+            For i = 0 To car_no - 1
+                If Car(i).flag = True Then
+                    Dim temp_Shelf_Car_No As String = ""
 
-                For j As Integer = 0 To 30
-                    BackString = Tag_point_list(i).floor_no.ToString + ":" + Tag_point_list(i).TagId.ToString + "(" + Round(i / Tag_point_list.Length, 1).ToString + "%) wait" + j.ToString
-                    If Car(idx).SlamTag > 0 Then
-                        Car(idx).SlamTag = 0
-                        Exit For
+                    If Car(i).get_Shelf_Car_No > 0 And Agvc_shelfcheck.Checked = True Then
+                        temp_Shelf_Car_No = Car(i).get_Shelf_Car_No.ToString
+                    ElseIf Car(i).cmd_Shelf_Car_No > 0 Then
+                        temp_Shelf_Car_No = Car(i).cmd_Shelf_Car_No.ToString
+                    Else
+                        temp_Shelf_Car_No = " 0 "
                     End If
-                    Thread.Sleep(100)
-                Next
-                'End If
+                    Dim VC1_MAX As Integer = Car(i).GetVcMax(Car(i).BMS1)
+                    Dim VC1_MIN As Integer = Car(i).GetVcMin(Car(i).BMS1)
+                    Dim VC2_MAX As Integer = Car(i).GetVcMax(Car(i).BMS2)
+                    Dim VC2_MIN As Integer = Car(i).GetVcMin(Car(i).BMS2)
+                    'Query = "update  `agv_list` set CmdKey=" + Car(i).cmd_sql_idx.ToString + ",carWork=" + Car(i).device_status(6).ToString + ",AGVAction='" + Car(i).get_pin().ToString + "',"
+                    'Query += "Status='" + Car(i).status.ToString + "',Position=" + Car(i).get_tagId().ToString + ",ErrorCode='" + Car(i).get_Err().ToString + "',"
+                    'Query += "Speed=" + Car(i).get_Speed().ToString + ",BatteryVoltage=" + Car(i).get_Volt().ToString + ",Shelf_Car_No=" + temp_Shelf_Car_No + ",Loading='" + _
+                    '    Car(i).get_loading.ToString + "',distance=" + Car(i).get_distance.ToString + ",Temp=" + Car(i).device_status(21).ToString + ",tag_change_time='" + _
+                    '    Car(i).Pre_TagID_time.ToString("yyyy-MM-dd HH:mm:ss") + "',AGV_X=" + Car(i).AXIS_X.ToString + " ,AGV_Y=" + Car(i).AXIS_Y.ToString + ",AGV_TH=" + Car(i).AXIS_Z.ToString + _
+                    '    ",VB1=" + Car(i).BMS1(7).ToString + ",IB1=" + Car(i).BMS1(8).ToString + " ,BT1=" + Car(i).BMS1(10).ToString + ",SOC1=" + Car(i).BMS1(14).ToString + ",SOH1=" + Car(i).BMS1(15).ToString + _
+                    '    ",PROT1=" + Car(i).BMS1(16).ToString + ",STAT1=" + Car(i).BMS1(17).ToString + " ,CHG_AH1=" + (Car(i).BMS1(37) * 65536 + Car(i).BMS1(38)).ToString + ",DSG_AH1=" + (Car(i).BMS1(39) * 65536 + Car(i).BMS1(40)).ToString + ",CYCLE1=" + Car(i).BMS1(41).ToString + _
+                    '     ",VB2=" + Car(i).BMS2(7).ToString + ",IB2=" + Car(i).BMS2(8).ToString + " ,BT2=" + Car(i).BMS2(10).ToString + ",SOC2=" + Car(i).BMS2(14).ToString + ",SOH2=" + Car(i).BMS2(15).ToString + _
+                    '    ",PROT2=" + Car(i).BMS2(16).ToString + ",STAT2=" + Car(i).BMS2(17).ToString + " ,CHG_AH2=" + (Car(i).BMS2(37) * 65536 + Car(i).BMS2(38)).ToString + ",DSG_AH2=" + (Car(i).BMS2(39) * 65536 + Car(i).BMS2(40)).ToString + ",CYCLE2=" + Car(i).BMS2(41).ToString + _
+                    '     ",VC1_MAX=" + VC1_MAX.ToString + ",VC1_MIN=" + VC1_MIN.ToString + " ,VC2_MAX=" + VC2_MAX.ToString + ",VC2_MIN=" + VC2_MIN.ToString + ",BT1_2=" + Car(i).BMS1(11).ToString + ",BT2_2=" + Car(i).BMS2(11).ToString + ",car_site='" + Car(i).Site.ToString + "'" + _
+                    '    "  where AGVNo=" + Car(i).device_no.ToString
 
+
+                    Query = "update  `agv_list` set CmdKey=" + Car(i).cmd_sql_idx.ToString + ",carWork=" + Car(i).device_status(6).ToString + ",AGVAction='" + Car(i).get_pin().ToString + "',"
+                    Query += "Status='" + Car(i).status.ToString + "',Position=" + Car(i).get_tagId().ToString + ",ErrorCode='" + Car(i).get_Err().ToString + "',"
+                    Query += "Speed=" + Car(i).get_Speed().ToString + ",BatteryVoltage=" + Car(i).get_Volt().ToString + ",Shelf_Car_No=" + temp_Shelf_Car_No + ",PIN=" + (Car(i).get_pin + Car(i).get_isbusy * 10).ToString + ",Loading='" + _
+                        Car(i).get_loading.ToString + "',distance=" + Car(i).get_distance.ToString + ",Temp=" + Car(i).device_status(21).ToString + ",tag_change_time='" + _
+                        Car(i).Pre_TagID_time.ToString("yyyy-MM-dd HH:mm:ss") + "'" + _
+                        ",VB1=" + Car(i).BMS1(7).ToString + ",IB1=" + Car(i).BMS1(8).ToString + " ,BT1=" + Car(i).BMS1(10).ToString + ",SOC1=" + Car(i).BMS1(14).ToString + ",SOH1=" + Car(i).BMS1(15).ToString + _
+                        ",PROT1=" + Car(i).BMS1(16).ToString + ",STAT1=" + Car(i).BMS1(17).ToString + " ,CHG_AH1=" + (Car(i).BMS1(37) * 65536 + Car(i).BMS1(38)).ToString + ",DSG_AH1=" + (Car(i).BMS1(39) * 65536 + Car(i).BMS1(40)).ToString + ",CYCLE1=" + Car(i).BMS1(41).ToString + _
+                         ",VB2=" + Car(i).BMS2(7).ToString + ",IB2=" + Car(i).BMS2(8).ToString + " ,BT2=" + Car(i).BMS2(10).ToString + ",SOC2=" + Car(i).BMS2(14).ToString + ",SOH2=" + Car(i).BMS2(15).ToString + _
+                        ",PROT2=" + Car(i).BMS2(16).ToString + ",STAT2=" + Car(i).BMS2(17).ToString + " ,CHG_AH2=" + (Car(i).BMS2(37) * 65536 + Car(i).BMS2(38)).ToString + ",DSG_AH2=" + (Car(i).BMS2(39) * 65536 + Car(i).BMS2(40)).ToString + ",CYCLE2=" + Car(i).BMS2(41).ToString + _
+                         ",VC1_MAX=" + VC1_MAX.ToString + ",VC1_MIN=" + VC1_MIN.ToString + " ,VC2_MAX=" + VC2_MAX.ToString + ",VC2_MIN=" + VC2_MIN.ToString + ",BT1_2=" + Car(i).BMS1(11).ToString + ",BT2_2=" + Car(i).BMS2(11).ToString + ",car_site='" + Car(i).Site.ToString + "'" + _
+                        "  where AGVNo=" + Car(i).device_no.ToString
+                    sqlCommand.CommandText = Query
+                    sqlCommand.ExecuteNonQuery()
+                    Query = "UPDATE `agv`.`agv_bat` SET "
+                    For j As Integer = 1 To 16
+                        Query += " bat1VC" + j.ToString + "=" + Car(i).BMS1(17 + j).ToString + " , "
+                        Query += " bat2VC" + j.ToString + "=" + Car(i).BMS2(17 + j).ToString + " , "
+                    Next
+                    Query += " LM_TIME=now() where AGVNo=" + Car(i).device_no.ToString
+                    sqlCommand.CommandText = Query
+                    sqlCommand.ExecuteNonQuery()
+                End If
+
+                If Car(i).Car_type = "FORK" And Car(i).cmd_Shelf_Car_No > 0 And Car(i).cmd_idx > 0 And Car(i).get_pin = 10 And Car(i).get_loading = 3 Then
+                    Query = "update `shelf_car` set LOCATION=" + Car(i).get_tagId.ToString + ",updateTime=now(),updateName='List_ReNew' where Shelf_Car_No=" + Car(i).cmd_Shelf_Car_No.ToString
+                    sqlCommand.CommandText = Query
+                    sqlCommand.ExecuteNonQuery()
+                ElseIf Not Car(i).Car_type = "FORK" And Car(i).get_Shelf_Car_No > 0 And Car(i).cmd_idx > 0 And Car(i).get_pin = 10 And Agvc_shelfcheck.Checked = True Then
+                    Query = "update `shelf_car` set LOCATION=" + Car(i).get_tagId.ToString + ",updateTime=now(),updateName='List_ReNew' where Shelf_Car_No=" + Car(i).get_Shelf_Car_No.ToString
+                    sqlCommand.CommandText = Query
+                    sqlCommand.ExecuteNonQuery()
+
+                ElseIf Not Car(i).Car_type = "FORK" And Car(i).cmd_Shelf_Car_No > 0 And Car(i).cmd_idx > 0 And Car(i).get_pin = 10 And Car(i).step_i > 1 Then
+                    Query = "update `shelf_car` set LOCATION=" + Car(i).get_tagId.ToString + ",updateTime=now(),updateName='List_ReNew' where Shelf_Car_No=" + Car(i).cmd_Shelf_Car_No.ToString
+
+                    sqlCommand.CommandText = Query
+                    sqlCommand.ExecuteNonQuery()
+                End If
             Next
-        End If
-        BackString = "ÂÆåÊàê"
+
+            ' settext("Update SQL:" + Query)
+
+            Query = "update `system_info` set updatetime=now() where SYSTEM_TYPE='AGVC'"
+
+            sqlCommand.CommandText = Query
+            sqlCommand.ExecuteNonQuery()
+        Catch ex As Exception
+            settext("Update SQL:" + Query.ToString)
+            settext("Update SQL ERROR")
+        End Try
+        Try
+
+            oConn.Close()
+            oConn.Dispose()
+        Catch ex As Exception
+
+        End Try
+
+
     End Sub
 
-    Private Sub Button14_Click_1(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button14.Click
-        If Not BackUp.IsBusy Then
-            BackUp.RunWorkerAsync()
-            BackString = "Start"
-        End If
+    Private Sub µe≠±¡Y§pToolStripMenuItem_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles µe≠±¡Y§pToolStripMenuItem.Click
+        Err_lb.Left -= 600
+        Label24.Left -= 600
+
+        GroupBox3.Left -= 600
+        GroupBox9.Left -= 600
+        agv_info.Left -= 600
+        pic_close.Left -= 600
+        txtCar.Left -= 600
+        From_cb.Left -= 600
+        To_cb.Left -= 600
+        rolldateTxt.Left -= 600
+        SendBtn.Left -= 600
+        Button16.Left -= 600
     End Sub
 
- 
+    Private Sub ZoomOutToolStripMenuItem_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles ZoomOutToolStripMenuItem.Click
+        Err_lb.Left += 600
+        Label24.Left += 600
+
+        GroupBox3.Left += 600
+        GroupBox9.Left += 600
+        agv_info.Left += 600
+        pic_close.Left += 600
+        txtCar.Left += 600
+        From_cb.Left += 600
+        To_cb.Left += 600
+        rolldateTxt.Left += 600
+        SendBtn.Left += 600
+        Button16.Left += 600
+    End Sub
+
+    Private Sub Button10_Click(ByVal sender As System.Object, ByVal e As System.EventArgs)
+        Del_CMD(1)
+        'loop
+        Send_CMD(Car(0).device_no, 1, 4101, "Loader", 51)
+        Send_CMD(Car(0).device_no, 1, 8197, "Loader", 50)
+        loader_flag = 1
+
+    End Sub
+
+    Private Sub Button11_Click_2(ByVal sender As System.Object, ByVal e As System.EventArgs)
+
+        loader_flag = 0
+        Update_SQL("delete from agv_cmd_list where `AGVNo`=1 ")
+        Send_CMD(Car(0).device_no, 4, 4101, "Loader", 60)
+    End Sub
+    Function GetVcMax(ByVal BMS)
+        Dim VC_List(15) As Integer
+        Array.Copy(BMS, 18, VC_List, 0, 16)
+        Array.Sort(VC_List)
+        GetVcMax = VC_List(15)
+    End Function
+    Function GetVcMin(ByVal BMS)
+        GetVcMin = 0
+        Dim VC_List(15) As Integer
+        Array.Copy(BMS, 18, VC_List, 0, 16)
+        Array.Sort(VC_List)
+        For i As Integer = 0 To 15
+            If VC_List(i) > 0 Then
+                GetVcMin = VC_List(i)
+                Exit Function
+            End If
+        Next
+        GetVcMin = VC_List(15)
+    End Function
+
+    Private Sub Button10_Click_2(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles Button10.Click
+   
+
+    End Sub
 End Class
